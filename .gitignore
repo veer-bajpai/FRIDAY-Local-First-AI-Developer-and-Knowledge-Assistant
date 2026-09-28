@@ -50,3 +50,4 @@ __pycache__/
 next-env.d.ts
 
 backend/data/
+.friday/

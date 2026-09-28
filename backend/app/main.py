@@ -2,6 +2,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 import time
 import uuid
 from datetime import datetime, timezone
@@ -13,6 +14,21 @@ from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+
+PROJECT_ROOT = next(
+    (
+        parent
+        for parent in Path(__file__).resolve().parents
+        if (parent / "friday_agent" / "__init__.py").is_file()
+    ),
+    None,
+)
+if PROJECT_ROOT is None:
+    raise RuntimeError("Could not locate the FRIDAY workspace root.")
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from .agent_routes import router as agent_router
 
 
 DATA_DIR = Path(os.getenv("FRIDAY_DATA_DIR", "./data"))
@@ -43,6 +59,7 @@ app = FastAPI(
     title="Friday API",
     version="1.0.0"
 )
+app.include_router(agent_router)
 
 
 # ============================================================

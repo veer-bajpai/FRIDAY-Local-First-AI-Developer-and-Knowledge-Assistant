@@ -279,6 +279,9 @@ function buildEnv() {
     NEXT_PUBLIC_API_URL:
       process.env.NEXT_PUBLIC_API_URL || `http://localhost:${BACKEND_PORT}`,
     FRIDAY_DATA_DIR: process.env.FRIDAY_DATA_DIR || path.join(HOME_DIR, "data"),
+    PYTHONPATH: [APP_DIR, process.env.PYTHONPATH]
+      .filter(Boolean)
+      .join(path.delimiter),
     PYTHONUNBUFFERED: "1",
   };
   fs.mkdirSync(env.FRIDAY_DATA_DIR, { recursive: true });
