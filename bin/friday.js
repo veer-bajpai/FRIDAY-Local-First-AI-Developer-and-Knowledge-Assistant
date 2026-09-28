@@ -65,7 +65,9 @@ if (args.includes("-v") || args.includes("--version")) {
 
 const KNOWN_COMMANDS = ["browser", "web", "start", "chat", "setup", "update"];
 if (cmd && !KNOWN_COMMANDS.includes(cmd)) {
-  die(`Unknown command "${cmd}". Try: friday browser | friday chat | friday --help`);
+  die(
+    `Unknown command "${cmd}". Try: friday browser | friday chat | friday --help`,
+  );
 }
 
 // ---------- helpers ----------
@@ -118,16 +120,22 @@ function portInUse(port) {
 }
 function waitFor(url, tries = 90) {
   return new Promise((resolve) => {
+    const retry = (n) => {
+      if (n <= 0) return resolve(false);
+      setTimeout(() => attempt(n - 1), 1000);
+    };
     const attempt = (n) => {
-      http
+      const request = http
         .get(url, (r) => {
+          if (r.statusCode < 200 || r.statusCode >= 300) {
+            r.resume();
+            return retry(n);
+          }
           r.resume();
           resolve(true);
         })
-        .on("error", () => {
-          if (n <= 0) return resolve(false);
-          setTimeout(() => attempt(n - 1), 1000);
-        });
+        .on("error", () => retry(n));
+      request.setTimeout(3000, () => request.destroy());
     };
     attempt(tries);
   });

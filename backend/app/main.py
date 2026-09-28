@@ -25,6 +25,7 @@ OLLAMA_URL = os.getenv(
 ).rstrip("/")
 OLLAMA_TIMEOUT = httpx.Timeout(120.0, connect=5.0)
 OLLAMA_MAX_TOKENS = int(os.getenv("FRIDAY_MAX_TOKENS", "128"))
+MAX_UPLOAD_BYTES = int(os.getenv("FRIDAY_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
 ollama_client: httpx.AsyncClient | None = None
 
 LEGACY_SYSTEM_PROMPT = """You are FRIDAY, a local-first developer assistant.
@@ -528,25 +529,19 @@ async def ingest(
                 errors="ignore"
             )
 
-        with db() as connection:
+        chunks = split_chunks(text)
+        embed_model = get_settings()["embed_model"]
 
+        with db() as connection:
             connection.execute(
-                """
-                DELETE FROM chunks
-                WHERE document_id = ?
-                """,
+                "DELETE FROM chunks WHERE document_id = ?",
                 (document_id,)
             )
 
-            for index, content in enumerate(
-                split_chunks(text)
-            ):
+        for index, content in enumerate(chunks):
+            vector = await embedding(content, embed_model)
 
-                vector = await embedding(
-                    content,
-                    get_settings()["embed_model"]
-                )
-
+            with db() as connection:
                 connection.execute(
                     """
                     INSERT INTO chunks(
@@ -561,12 +556,11 @@ async def ingest(
                         document_id,
                         index,
                         content,
-                        json.dumps(vector)
-                        if vector
-                        else None
+                        json.dumps(vector) if vector else None
                     )
                 )
 
+        with db() as connection:
             connection.execute(
                 """
                 UPDATE documents
@@ -576,10 +570,7 @@ async def ingest(
                     updated_at = ?
                 WHERE id = ?
                 """,
-                (
-                    timestamp(),
-                    document_id
-                )
+                (timestamp(), document_id)
             )
 
         activity(
@@ -870,7 +861,17 @@ async def upload_document(
     file: UploadFile = File(...)
 ) -> dict[str, Any]:
 
-    content = await file.read()
+    content_parts: list[bytes] = []
+    content_size = 0
+    while chunk := await file.read(1024 * 1024):
+        content_size += len(chunk)
+        if content_size > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                413,
+                f"File exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB upload limit"
+            )
+        content_parts.append(chunk)
+    content = b"".join(content_parts)
 
     name = Path(
         file.filename or "untitled.txt"
@@ -885,7 +886,10 @@ async def upload_document(
         f"{document_id}-{name}"
     )
 
-    path.write_bytes(content)
+    try:
+        path.write_bytes(content)
+    except OSError as exc:
+        raise HTTPException(500, "Could not save uploaded file") from exc
 
     created = timestamp()
 
@@ -995,19 +999,16 @@ def delete_document(
                 "Document not found"
             )
 
+    try:
+        Path(row["file_path"]).unlink(missing_ok=True)
+    except OSError as exc:
+        raise HTTPException(500, "Could not remove the uploaded file") from exc
+
+    with db() as connection:
         connection.execute(
-            """
-            DELETE FROM documents
-            WHERE id = ?
-            """,
+            "DELETE FROM documents WHERE id = ?",
             (document_id,)
         )
-
-    Path(
-        row["file_path"]
-    ).unlink(
-        missing_ok=True
-    )
 
     activity(
         "delete",
@@ -1385,6 +1386,20 @@ def add_to_collection(
 
     with db() as connection:
 
+        collection = connection.execute(
+            "SELECT 1 FROM collections WHERE id = ?",
+            (collection_id,)
+        ).fetchone()
+        document = connection.execute(
+            "SELECT 1 FROM documents WHERE id = ?",
+            (document_id,)
+        ).fetchone()
+
+        if not collection:
+            raise HTTPException(404, "Collection not found")
+        if not document:
+            raise HTTPException(404, "Document not found")
+
         connection.execute(
             """
             INSERT OR IGNORE INTO collection_documents
@@ -1665,6 +1680,7 @@ async def chat_stream(
 ) -> StreamingResponse:
 
     current = get_settings()
+    created_conversation = request.conversation_id is None
 
     conversation_id = (
         request.conversation_id
@@ -1870,6 +1886,13 @@ async def chat_stream(
             )
 
         except Exception as exc:
+
+            if created_conversation:
+                with db() as connection:
+                    connection.execute(
+                        "DELETE FROM conversations WHERE id = ?",
+                        (conversation_id,)
+                    )
 
             activity(
                 "chat",

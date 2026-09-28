@@ -75,13 +75,7 @@ type SettingsData = {
   system_prompt: string;
 };
 
-const API =
-  process.env.NEXT_PUBLIC_API_URL ||
-  (typeof window !== "undefined" &&
-  window.location.hostname !== "localhost" &&
-  window.location.hostname !== "127.0.0.1"
-    ? "https://friday-backend-qair.onrender.com"
-    : "http://localhost:8000");
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers ?? {});
@@ -351,7 +345,7 @@ export default function Home() {
 
   async function upload(files: File[]) {
     const supportedFiles = files.filter((file) =>
-      /\.(pdf|md|txt|csv|png|jpe?g|gif|webp|bmp)$/i.test(file.name),
+      /\.(pdf|md|txt|csv|png|jpe?g|gif|webp|bmp|heic|heif)$/i.test(file.name),
     );
     if (!supportedFiles.length) {
       setError("Choose PDF, Markdown, text, CSV, or image files.");
@@ -405,7 +399,11 @@ export default function Home() {
             <X size={18} />
           </button>
         </div>
-        <button className="new-chat" onClick={newConversation}>
+        <button
+          className="new-chat"
+          onClick={newConversation}
+          disabled={isSending}
+        >
           <Plus size={16} /> New conversation <span>⌘ K</span>
         </button>
         <nav className="main-nav" aria-label="Primary navigation">
@@ -413,6 +411,7 @@ export default function Home() {
             <button
               className={`nav-item ${view === label ? "selected" : ""}`}
               key={label}
+              disabled={isSending}
               onClick={() => {
                 setView(label);
                 setMobileMenu(false);
@@ -882,8 +881,9 @@ function SettingsView({
   const [draft, setDraft] = useState<SettingsData | undefined>(
     () => settingsData,
   );
+  const currentDraft = draft ?? settingsData;
 
-  if (!draft)
+  if (!currentDraft)
     return (
       <div className="data-list">
         <div className="settings-card">
@@ -895,7 +895,7 @@ function SettingsView({
   async function save() {
     const saved = await api<SettingsData>("/api/settings", {
       method: "PUT",
-      body: JSON.stringify(draft),
+      body: JSON.stringify(currentDraft),
     });
     onSaved(saved);
   }
@@ -907,18 +907,18 @@ function SettingsView({
         <label>
           Generation model
           <input
-            value={draft.model}
+            value={currentDraft.model}
             onChange={(event) =>
-              setDraft({ ...draft, model: event.target.value })
+              setDraft({ ...currentDraft, model: event.target.value })
             }
           />
         </label>
         <label>
           Embedding model
           <input
-            value={draft.embed_model}
+            value={currentDraft.embed_model}
             onChange={(event) =>
-              setDraft({ ...draft, embed_model: event.target.value })
+              setDraft({ ...currentDraft, embed_model: event.target.value })
             }
           />
         </label>
@@ -928,9 +928,9 @@ function SettingsView({
             type="number"
             min="1"
             max="20"
-            value={draft.top_k}
+            value={currentDraft.top_k}
             onChange={(event) =>
-              setDraft({ ...draft, top_k: Number(event.target.value) })
+              setDraft({ ...currentDraft, top_k: Number(event.target.value) })
             }
           />
         </label>
@@ -941,9 +941,12 @@ function SettingsView({
             min="0"
             max="2"
             step="0.1"
-            value={draft.max_distance}
+            value={currentDraft.max_distance}
             onChange={(event) =>
-              setDraft({ ...draft, max_distance: Number(event.target.value) })
+              setDraft({
+                ...currentDraft,
+                max_distance: Number(event.target.value),
+              })
             }
           />
         </label>
@@ -954,9 +957,12 @@ function SettingsView({
             min="0"
             max="2"
             step="0.1"
-            value={draft.temperature}
+            value={currentDraft.temperature}
             onChange={(event) =>
-              setDraft({ ...draft, temperature: Number(event.target.value) })
+              setDraft({
+                ...currentDraft,
+                temperature: Number(event.target.value),
+              })
             }
           />
         </label>
@@ -964,9 +970,9 @@ function SettingsView({
           System prompt
           <textarea
             rows={5}
-            value={draft.system_prompt}
+            value={currentDraft.system_prompt}
             onChange={(event) =>
-              setDraft({ ...draft, system_prompt: event.target.value })
+              setDraft({ ...currentDraft, system_prompt: event.target.value })
             }
           />
         </label>

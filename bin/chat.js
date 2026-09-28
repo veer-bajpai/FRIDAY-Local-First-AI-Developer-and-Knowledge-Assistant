@@ -50,6 +50,7 @@ async function start({ api, args = [] }) {
 
   async function ask(question) {
     controller = new AbortController();
+    let failed = false;
     process.stdout.write("\n" + green("friday › "));
     let res;
     try {
@@ -86,7 +87,10 @@ async function start({ api, args = [] }) {
               continue;
             }
             if (msg.token) process.stdout.write(msg.token);
-            if (msg.error) process.stdout.write("\n" + red(msg.error));
+            if (msg.error) {
+              failed = true;
+              process.stdout.write("\n" + red(msg.error));
+            }
             if (msg.done) {
               state.convId = msg.conversation_id || state.convId;
               const seen = new Set();
@@ -102,10 +106,12 @@ async function start({ api, args = [] }) {
         }
       }
       process.stdout.write("\n\n");
+      return !failed;
     } catch (e) {
       if (e.name === "AbortError")
         process.stdout.write(dim("\n  (stopped)\n\n"));
       else process.stdout.write("\n" + red("  error: " + e.message) + "\n\n");
+      return false;
     } finally {
       controller = null;
     }
@@ -213,8 +219,7 @@ async function start({ api, args = [] }) {
       return 1;
     }
     state.showSources = false;
-    await ask(q);
-    return 0;
+    return (await ask(q)) ? 0 : 1;
   }
 
   // ---- interactive REPL ----
