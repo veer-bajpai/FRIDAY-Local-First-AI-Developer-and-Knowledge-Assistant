@@ -181,6 +181,7 @@ The CLI runs the frontend and backend as local processes. Ollama is detected sep
 | `OLLAMA_URL`             | FastAPI and CLI            | Ollama API base URL; `http://localhost:11434`                                                   |
 | `FRIDAY_MODEL`           | CLI/backend initialization | Generation model; `llama3.2:latest` backend default                                             |
 | `FRIDAY_EMBED_MODEL`     | CLI/backend initialization | Embedding model; `nomic-embed-text:latest` backend default                                      |
+| `FRIDAY_MAX_TOKENS`      | FastAPI backend            | Maximum generated chat tokens; defaults to `128` for faster responses                           |
 | `FRIDAY_ALLOWED_ORIGINS` | FastAPI                    | Comma-separated additional CORS origins; known local and deployed frontend origins are retained |
 | `FRIDAY_THEME`           | CLI banner                 | `cyan`, `orange`, `green`, or `purple`                                                          |
 | `FRIDAY_MASCOT`          | CLI banner                 | Set to `0` to hide the avatar                                                                   |

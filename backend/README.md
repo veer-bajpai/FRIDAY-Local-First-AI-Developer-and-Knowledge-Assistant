@@ -75,13 +75,14 @@ The API can serve health, settings, documents, collections, history, and lexical
 
 ## Environment variables
 
-| Variable                 | Default                                        | Purpose                                                 |
-| ------------------------ | ---------------------------------------------- | ------------------------------------------------------- |
-| `FRIDAY_DATA_DIR`        | `./data` relative to backend working directory | SQLite database and uploads root                        |
-| `OLLAMA_URL`             | `http://localhost:11434`                       | Ollama API base URL                                     |
-| `FRIDAY_MODEL`           | `llama3.2:latest`                              | Default chat model when settings are first created      |
-| `FRIDAY_EMBED_MODEL`     | `nomic-embed-text:latest`                      | Default embedding model when settings are first created |
-| `FRIDAY_ALLOWED_ORIGINS` | Built-in local and deployed frontend origins   | Additional comma-separated CORS origins                 |
+| Variable                 | Default                                        | Purpose                                                    |
+| ------------------------ | ---------------------------------------------- | ---------------------------------------------------------- |
+| `FRIDAY_DATA_DIR`        | `./data` relative to backend working directory | SQLite database and uploads root                           |
+| `OLLAMA_URL`             | `http://localhost:11434`                       | Ollama API base URL                                        |
+| `FRIDAY_MODEL`           | `llama3.2:latest`                              | Default chat model when settings are first created         |
+| `FRIDAY_EMBED_MODEL`     | `nomic-embed-text:latest`                      | Default embedding model when settings are first created    |
+| `FRIDAY_MAX_TOKENS`      | `128`                                          | Maximum generated chat tokens; increase for longer answers |
+| `FRIDAY_ALLOWED_ORIGINS` | Built-in local and deployed frontend origins   | Additional comma-separated CORS origins                    |
 
 The backend does not load `.env` files itself. The launcher and Docker Compose provide their configured environment variables.
 

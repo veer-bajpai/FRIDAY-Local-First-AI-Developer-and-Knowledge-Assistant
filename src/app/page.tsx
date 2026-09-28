@@ -272,6 +272,20 @@ export default function Home() {
       });
       if (!response.ok || !response.body)
         throw new Error("Chat request failed");
+      const assistantIndex = messages.length + 1;
+      let assistantContent = "";
+      let lastPaint = 0;
+      const paintAssistant = (force = false) => {
+        const now = performance.now();
+        if (!force && now - lastPaint < 50) return;
+        lastPaint = now;
+        const content = assistantContent;
+        setMessages((current) =>
+          current.map((item, index) =>
+            index === assistantIndex ? { ...item, content } : item,
+          ),
+        );
+      };
       setMessages((current) => [
         ...current,
         { role: "assistant", content: "" },
@@ -297,16 +311,13 @@ export default function Home() {
           if (payload.error) throw new Error(payload.error);
           if (payload.conversation_id)
             completedConversationId = payload.conversation_id;
-          if (payload.token)
-            setMessages((current) =>
-              current.map((item, index) =>
-                index === current.length - 1
-                  ? { ...item, content: item.content + payload.token }
-                  : item,
-              ),
-            );
+          if (payload.token) {
+            assistantContent += payload.token;
+            paintAssistant();
+          }
         }
       }
+      paintAssistant(true);
       setConversationId(completedConversationId);
       await loadConversations();
     } catch (reason) {

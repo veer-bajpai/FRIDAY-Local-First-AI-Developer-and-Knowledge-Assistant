@@ -23,6 +23,9 @@ OLLAMA_URL = os.getenv(
     "OLLAMA_URL",
     "http://localhost:11434"
 ).rstrip("/")
+OLLAMA_TIMEOUT = httpx.Timeout(120.0, connect=5.0)
+OLLAMA_MAX_TOKENS = int(os.getenv("FRIDAY_MAX_TOKENS", "128"))
+ollama_client: httpx.AsyncClient | None = None
 
 LEGACY_SYSTEM_PROMPT = """You are FRIDAY, a local-first developer assistant.
 Use concise Markdown. Put every code sample in a fenced Markdown code block with a language tag.
@@ -283,8 +286,26 @@ def initialize() -> None:
 
 
 @app.on_event("startup")
-def startup() -> None:
+async def startup() -> None:
+    global ollama_client
     initialize()
+
+    ollama_client = httpx.AsyncClient(timeout=OLLAMA_TIMEOUT)
+
+
+@app.on_event("shutdown")
+async def shutdown() -> None:
+    global ollama_client
+    if ollama_client is not None:
+        await ollama_client.aclose()
+        ollama_client = None
+
+
+def get_ollama_client() -> httpx.AsyncClient:
+    global ollama_client
+    if ollama_client is None:
+        ollama_client = httpx.AsyncClient(timeout=OLLAMA_TIMEOUT)
+    return ollama_client
 
 
 # ============================================================
@@ -407,23 +428,19 @@ async def embedding(
 ) -> list[float] | None:
 
     try:
-        async with httpx.AsyncClient(
-            timeout=60
-        ) as client:
+        response = await get_ollama_client().post(
+            f"{OLLAMA_URL}/api/embeddings",
+            json={
+                "model": model,
+                "prompt": text
+            }
+        )
 
-            response = await client.post(
-                f"{OLLAMA_URL}/api/embeddings",
-                json={
-                    "model": model,
-                    "prompt": text
-                }
-            )
+        response.raise_for_status()
 
-            response.raise_for_status()
-
-            return response.json().get(
-                "embedding"
-            )
+        return response.json().get(
+            "embedding"
+        )
 
     except Exception:
         return None
@@ -1518,33 +1535,29 @@ async def chat(
 
     try:
 
-        async with httpx.AsyncClient(
-            timeout=120
-        ) as client:
+        response = await get_ollama_client().post(
+            f"{OLLAMA_URL}/api/chat",
+            json={
+                "model": current["model"],
+                "messages": messages,
+                "stream": False,
+                "keep_alive": "5m",
+                "options": {
+                    "temperature": current["temperature"],
+                    "num_predict": OLLAMA_MAX_TOKENS,
+                },
+            }
+        )
 
-            response = await client.post(
-                f"{OLLAMA_URL}/api/chat",
-                json={
-                    "model": current["model"],
-                    "messages": messages,
-                    "stream": False,
-                    "keep_alive": "5m",
-                    "options": {
-                        "temperature": current["temperature"],
-                        "num_predict": 256,
-                    },
-                }
-            )
+        response.raise_for_status()
 
-            response.raise_for_status()
-
-            answer = (
-                response.json()
-                .get("message", {})
-                .get("content", "")
-                .strip()
-                or "Ollama returned an empty response."
-            )
+        answer = (
+            response.json()
+            .get("message", {})
+            .get("content", "")
+            .strip()
+            or "Ollama returned an empty response."
+        )
 
     except Exception as exc:
 
@@ -1730,24 +1743,20 @@ async def chat_stream(
 
         try:
 
-            async with httpx.AsyncClient(
-                timeout=120
-            ) as client:
-
-                async with client.stream(
-                    "POST",
-                    f"{OLLAMA_URL}/api/chat",
-                    json={
-                        "model": current["model"],
-                        "messages": messages,
-                        "stream": True,
-                        "keep_alive": "5m",
-                        "options": {
-                            "temperature": current["temperature"],
-                            "num_predict": 256,
-                        },
-                    }
-                ) as response:
+            async with get_ollama_client().stream(
+                "POST",
+                f"{OLLAMA_URL}/api/chat",
+                json={
+                    "model": current["model"],
+                    "messages": messages,
+                    "stream": True,
+                    "keep_alive": "5m",
+                    "options": {
+                        "temperature": current["temperature"],
+                        "num_predict": OLLAMA_MAX_TOKENS,
+                    },
+                }
+            ) as response:
 
                     response.raise_for_status()
 
