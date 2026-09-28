@@ -24,9 +24,11 @@ OLLAMA_URL = os.getenv(
     "http://localhost:11434"
 ).rstrip("/")
 
-SYSTEM_PROMPT = """You are FRIDAY, a local-first developer assistant.
+LEGACY_SYSTEM_PROMPT = """You are FRIDAY, a local-first developer assistant.
 Use concise Markdown. Put every code sample in a fenced Markdown code block with a language tag.
 Prefer headings and lists when useful. Never put code in an unfenced paragraph."""
+PREVIOUS_SYSTEM_PROMPT = "You are FRIDAY. Answer concisely in Markdown. Fence code samples with a language tag."
+SYSTEM_PROMPT = "You are FRIDAY. Answer directly and concisely. Do not include code, code blocks, or programming examples unless the user explicitly asks for code or asks a programming-related question. When code is relevant, use concise Markdown and fenced code blocks with a language tag."
 
 
 # ============================================================
@@ -269,6 +271,14 @@ def initialize() -> None:
             VALUES (?, ?)
             """,
             defaults.items()
+        )
+        connection.execute(
+            """
+            UPDATE settings
+            SET value = ?
+            WHERE key = 'system_prompt' AND value IN (?, ?)
+            """,
+            (SYSTEM_PROMPT, LEGACY_SYSTEM_PROMPT, PREVIOUS_SYSTEM_PROMPT)
         )
 
 
@@ -1405,6 +1415,20 @@ def remove_from_collection(
 # CHAT
 # ============================================================
 
+def recent_history(rows: list[sqlite3.Row]) -> list[dict[str, str]]:
+    selected: list[dict[str, str]] = []
+    remaining_chars = 6000
+
+    for row in rows:
+        if len(selected) >= 8 or remaining_chars <= 0:
+            break
+
+        content = row["content"][-remaining_chars:]
+        selected.append({"role": row["role"], "content": content})
+        remaining_chars -= len(content)
+
+    return list(reversed(selected))
+
 @app.post("/api/chat")
 async def chat(
     request: ChatRequest
@@ -1438,7 +1462,7 @@ async def chat(
             FROM messages
             WHERE conversation_id = ?
             ORDER BY id DESC
-            LIMIT 12
+            LIMIT 8
             """,
             (conversation_id,)
         ).fetchall()
@@ -1480,10 +1504,7 @@ async def chat(
             "role": "system",
             "content": current["system_prompt"]
         },
-        *[
-            dict(row)
-            for row in reversed(history)
-        ],
+        *recent_history(history),
         {
             "role": "user",
             "content": prompt
@@ -1510,7 +1531,7 @@ async def chat(
                     "keep_alive": "5m",
                     "options": {
                         "temperature": current["temperature"],
-                        "num_predict": 512,
+                        "num_predict": 256,
                     },
                 }
             )
@@ -1654,7 +1675,7 @@ async def chat_stream(
             FROM messages
             WHERE conversation_id = ?
             ORDER BY id DESC
-            LIMIT 12
+            LIMIT 8
             """,
             (conversation_id,)
         ).fetchall()
@@ -1696,10 +1717,7 @@ async def chat_stream(
             "role": "system",
             "content": current["system_prompt"]
         },
-        *[
-            dict(row)
-            for row in reversed(history)
-        ],
+        *recent_history(history),
         {
             "role": "user",
             "content": prompt
@@ -1726,7 +1744,7 @@ async def chat_stream(
                         "keep_alive": "5m",
                         "options": {
                             "temperature": current["temperature"],
-                            "num_predict": 512,
+                            "num_predict": 256,
                         },
                     }
                 ) as response:

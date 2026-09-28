@@ -1,3 +1,60 @@
+## Quick start
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/veer-bajpai/FRIDAY-Local-First-AI-Knowledge-Assistant/main/install.ps1 | iex
+```
+
+macOS / Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/veer-bajpai/FRIDAY-Local-First-AI-Knowledge-Assistant/main/install.sh | bash
+```
+
+Then open a new terminal:
+
+```sh
+friday
+friday chat
+friday chat -p "question"
+friday setup
+friday update
+friday --no-open
+friday --help
+```
+
+`friday` starts the web UI; `friday chat` uses the same backend history and documents. Setup installs Git, Node.js, Python, Ollama, and the `llama3.2` and `nomic-embed-text` models.
+
+Terminal chat commands: `/new`, `/history`, `/resume <n>`, `/docs`, `/status`, `/sources on|off`, `/k <1-20>`, `/clear`, `/help`, `/exit`.
+
+Data is stored in `~/.friday/data` (override with `FRIDAY_DATA_DIR`).
+
+Requirements: Git, Node.js 20+, Python 3.11+ (the Windows installer installs Python 3.12), and Ollama for model-backed chat and embeddings. The installer sets up Ollama and pulls `llama3.2` and `nomic-embed-text`.
+
+The Windows installer requires `winget`; macOS uses Homebrew; Linux supports `apt`, `dnf`, or `pacman` (and `sudo` when system packages need elevated installation). First setup needs an internet connection and several gigabytes of free space for npm/Python packages and model downloads. The installer scripts must be committed to the repository's `main` branch before the raw GitHub commands above can work.
+
+## Install directly from GitHub
+
+After the installer files are published on `main`, a new Windows machine can install FRIDAY from Command Prompt with:
+
+```cmd
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm 'https://raw.githubusercontent.com/veer-bajpai/FRIDAY-Local-First-AI-Knowledge-Assistant/main/install.ps1' | iex"
+```
+
+The script uses `winget` to install Git, Node.js 20+, Python 3.12, and Ollama. It then clones the repository into `%USERPROFILE%\\.friday\\app`, creates `%USERPROFILE%\\.friday\\bin\\friday.cmd`, installs frontend and backend dependencies, builds Next.js, and downloads the configured Ollama models. Open a new terminal after installation so the user PATH update is loaded.
+
+For a local checkout, run the same setup without cloning:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\\install.ps1
+```
+
+The installer is not an offline bundle: dependencies and AI models are downloaded during setup. `winget` must already be available through Windows App Installer.
+
+See [Architecture](docs/architecture.md) for the implemented service boundaries, startup sequence, data flows, API routes, deployment modes, and current retrieval limitations. See [Backend guide](backend/README.md) for direct API development.
+
 # FRIDAY: Local-First AI Developer & Knowledge Assistant
 
 <p align="center">
@@ -6,7 +63,7 @@
 </p>
 
 <p align="center">
-  A local-first AI workspace for conversational assistance, semantic search, document intelligence, and retrieval-augmented generation.
+   A local-first AI workspace for conversational assistance, document search, document intelligence, and retrieval-augmented generation.
 </p>
 
 <p align="center">
@@ -14,7 +71,7 @@
   <img src="https://img.shields.io/badge/React-TypeScript-blue?style=for-the-badge&logo=react" alt="React"/>
   <img src="https://img.shields.io/badge/FastAPI-Python-009688?style=for-the-badge&logo=fastapi" alt="FastAPI"/>
   <img src="https://img.shields.io/badge/Ollama-Local%20AI-white?style=for-the-badge" alt="Ollama"/>
-  <img src="https://img.shields.io/badge/RAG-Semantic%20Search-purple?style=for-the-badge" alt="RAG"/>
+   <img src="https://img.shields.io/badge/RAG-Lexical%20Retrieval-purple?style=for-the-badge" alt="RAG"/>
   <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="MIT License"/>
 </p>
 
@@ -22,13 +79,13 @@
 
 ## 🧠 What is Friday?
 
-**Friday** is a local-first personal AI workspace designed to combine conversational AI with document intelligence and semantic retrieval.
+**Friday** is a local-first personal AI workspace designed to combine conversational AI with document intelligence and lexical retrieval.
 
 Instead of treating an AI assistant as only a chat window, Friday is designed as a complete knowledge workspace where users can:
 
 - 💬 Chat with a local AI assistant
 - 📄 Upload and manage documents
-- 🔎 Search information semantically
+- 🔎 Search indexed document chunks
 - 🧠 Retrieve relevant document context
 - 📚 Ground AI responses in user-provided sources
 - 📊 Inspect assistant activity
@@ -38,39 +95,26 @@ Instead of treating an AI assistant as only a chat window, Friday is designed as
 
 The application is built around a **frontend → API → retrieval → model** architecture, allowing the user interface and AI engine to evolve independently.
 
-## Current local deployment
+## Local services
 
-The supported local setup runs three services:
+The CLI runs the Next.js frontend at `http://localhost:3000` and FastAPI at `http://localhost:8000`. Ollama normally listens at `http://localhost:11434`. Run `friday setup` once to install dependencies, build the frontend, start/check Ollama, and pull configured models; subsequent `friday` starts reuse cached setup. The CLI stores its SQLite database and uploads under `~/.friday/data` by default.
 
-- Next.js frontend at `http://localhost:3000`
-- FastAPI backend at `http://localhost:8000`
-- Ollama at `http://localhost:11434` when local AI is enabled
+Useful commands:
 
-Local startup examples:
+| Command                     | Behavior                                                     |
+| --------------------------- | ------------------------------------------------------------ |
+| `friday`                    | Start backend and web client; open the browser               |
+| `friday --no-open`          | Start services without opening a browser                     |
+| `friday chat`               | Interactive terminal chat using the shared backend history   |
+| `friday chat -p "question"` | Ask one question and exit                                    |
+| `friday setup`              | Install/cache dependencies, build, and prepare Ollama models |
+| `friday update`             | Fast-forward the CLI checkout and invalidate setup stamps    |
 
-```powershell
-# Frontend
-npm install
-npm run dev -- --hostname 0.0.0.0 --port 3000
+Terminal chat supports `/new`, `/history`, `/resume <n|id>`, `/docs`, `/status`, `/sources on|off`, `/k <1-20>`, `/clear`, `/help`, and `/exit`. Banner options: `FRIDAY_THEME=cyan|orange|green|purple`, `FRIDAY_MASCOT=0`, `FRIDAY_NO_BANNER=1`; `NO_COLOR` and non-TTY output also suppress the banner.
 
-# Backend
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r backend/requirements.txt
-cd backend
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-```
+### Image uploads
 
-Requirements:
-
-- Node.js 20+ and npm
-- Python 3.11+ with a virtual environment
-- Optional local Ollama instance at `http://localhost:11434` for model-backed chat and embeddings
-- SQLite data and uploaded files remain under `data/`, which is ignored by Git
-
-### Photo-only chat image input
-
-The chat composer includes a dedicated image button that is restricted to photo files only. The picker accepts common image formats such as `png`, `jpg`, `jpeg`, `gif`, `webp`, `bmp`, `heic`, and `heif`, and it rejects any non-image selection. The separate document upload flow remains available for PDFs, Markdown, text, CSV, and other supported file types.
+The chat composer includes a dedicated photo picker and rejects non-image selections in that picker. The backend currently accepts raster uploads but does not OCR or interpret image pixels; image files do not yield searchable text. The separate document upload flow supports PDF text extraction and UTF-8 text-like files such as Markdown, TXT, and CSV.
 
 ---
 
@@ -99,7 +143,7 @@ The frontend communicates with the FastAPI service through REST endpoints.
 
 Friday is designed around a document-aware assistant rather than a generic chatbot.
 
-The document layer provides the foundation for:
+The current document pipeline provides:
 
 ```text
 Document
@@ -108,11 +152,11 @@ Text extraction
    ↓
 Chunking
    ↓
-Embedding generation
+Optional Ollama embedding generation
    ↓
-Vector indexing
+SQLite chunk storage
    ↓
-Semantic retrieval
+Lexical chunk ranking
    ↓
 Relevant context
    ↓
@@ -125,11 +169,9 @@ Documents can become searchable knowledge sources for future conversations.
 
 ---
 
-### 🔎 Semantic Search
+### 🔎 Search and retrieval
 
-Traditional keyword search looks for exact words.
-
-Friday is designed to understand the **meaning** behind a query.
+The current search implementation uses lexical token overlap, not semantic/vector similarity.
 
 For example:
 
@@ -139,18 +181,14 @@ Query:
 
         ↓
 
-Semantic representation
-
-        ↓
-
-Vector similarity search
+Token overlap ranking
 
         ↓
 
 Relevant document chunks
 ```
 
-This allows conceptually related information to be retrieved even when the exact query words do not appear in the source document.
+Chunks are ranked by the share of unique query tokens they contain, then filtered by the configured maximum distance and limited to the requested top-k count. Embeddings are stored when available but are not used by the current retrieval function.
 
 ---
 
@@ -165,7 +203,7 @@ User Question
 Query Processing
       │
       ▼
-Semantic Retrieval
+   Lexical Chunk Ranking
       │
       ▼
 Top-K Relevant Chunks
@@ -180,7 +218,7 @@ Local LLM
 Grounded Answer + Sources
 ```
 
-The backend exposes a chat boundary with configurable retrieval count (`k`) and is structured to support local model integration.
+The backend exposes configurable retrieval count (`k`), collection filtering, and source metadata. Ollama provides optional embedding generation during ingestion and the generation model for chat.
 
 ---
 
@@ -188,79 +226,18 @@ The backend exposes a chat boundary with configurable retrieval count (`k`) and 
 
 ## High-Level Architecture
 
-```text
-                         ┌─────────────────────────┐
-                         │        USER             │
-                         │                         │
-                         │  Chat / Search / Upload │
-                         └────────────┬────────────┘
-                                      │
-                                      ▼
-                    ┌──────────────────────────────┐
-                    │      FRIDAY WEB CLIENT       │
-                    │                              │
-                    │       Next.js + React        │
-                    │                              │
-                    │  ┌────────────────────────┐  │
-                    │  │ Chat                  │  │
-                    │  │ Documents             │  │
-                    │  │ Activity              │  │
-                    │  │ History               │  │
-                    │  │ Library                │  │
-                    │  │ Settings               │  │
-                    │  └────────────────────────┘  │
-                    └──────────────┬───────────────┘
-                                   │
-                              REST / JSON
-                                   │
-                                   ▼
-                    ┌──────────────────────────────┐
-                    │       FASTAPI BACKEND        │
-                    │                              │
-                    │      Python API Layer        │
-                    │                              │
-                    │  /health                     │
-                    │  /api/status                 │
-                    │  /api/documents              │
-                    │  /api/documents/upload       │
-                    │  /api/search                 │
-                    │  /api/chat                   │
-                    │  /api/chat/stream            │
-                    │  /api/conversations          │
-                    │  /api/collections            │
-                    │  /api/settings               │
-                    └──────────────┬───────────────┘
-                                   │
-                 ┌─────────────────┼─────────────────┐
-                 │                 │                 │
-                 ▼                 ▼                 ▼
-        ┌────────────────┐ ┌───────────────┐ ┌─────────────────┐
-        │ Document       │ │ Vector Search │ │ LLM Generation │
-        │ Pipeline       │ │ Engine        │ │                 │
-        │                │ │               │ │ Ollama          │
-        │ Upload         │ │ HNSW          │ │ llama3.2        │
-        │ Extraction     │ │ KD-Tree       │ │                 │
-        │ Chunking       │ │ Brute Force   │ │ Embeddings      │
-        └───────┬────────┘ └───────┬───────┘ │ nomic-embed     │
-                │                  │         └────────┬────────┘
-                └──────────────────┼──────────────────┘
-                                   │
-                                   ▼
-                         ┌─────────────────────┐
-                         │   RAG CONTEXT       │
-                         │                     │
-                         │ Relevant chunks     │
-                         │ + metadata          │
-                         │ + sources           │
-                         └──────────┬──────────┘
-                                    │
-                                    ▼
-                         ┌─────────────────────┐
-                         │ GROUNDED RESPONSE   │
-                         │                     │
-                         │ Answer + Sources    │
-                         └─────────────────────┘
+```mermaid
+flowchart LR
+   User --> Web[Next.js web client]
+   User --> CLI[friday CLI / terminal chat]
+   Web -->|REST and SSE| API[FastAPI on :8000]
+   CLI -->|REST and SSE| API
+   API --> DB[(SQLite and uploaded files)]
+   API -->|embeddings and chat generation| Ollama[Ollama]
+   API -->|lexical ranking| Chunks[SQLite text chunks]
 ```
+
+The browser and terminal chat share the same FastAPI service and storage. The current retrieval algorithm is lexical token-overlap ranking; embeddings are stored when Ollama returns them, but no vector index is implemented. See [docs/architecture.md](docs/architecture.md) for component details, API routes, schema, and request sequences.
 
 ---
 
@@ -300,30 +277,13 @@ The product UI exposes retrieval count and maximum distance settings. The curren
 Friday is separated into independent application layers.
 
 ```text
-FRIDAY
-│
-├── Presentation Layer
-│   └── Next.js / React
-│
-├── API Layer
-│   └── FastAPI
-│
-├── Retrieval Layer
-│   ├── Embeddings
-│   ├── Vector Index
-│   ├── Similarity Search
-│   └── Top-K Retrieval
-│
-├── Knowledge Layer
-│   ├── Documents
-│   ├── Chunks
-│   ├── Metadata
-│   └── Sources
-│
-└── Intelligence Layer
-    ├── Ollama
-    ├── Embedding Model
-    └── Generation Model
+Browser or terminal CLI
+        │ REST / SSE
+        ▼
+     FastAPI API ─────── Ollama (optional embeddings and chat)
+        │
+        ├── SQLite: settings, documents, chunks, conversations, activity
+        └── Filesystem: uploaded source files
 ```
 
 This separation makes it possible to replace individual components without rebuilding the entire application.
@@ -382,20 +342,24 @@ The backend is implemented using **FastAPI**.
 
 Current API boundary:
 
-| Endpoint                |   Method | Purpose                      |
-| ----------------------- | -------: | ---------------------------- |
-| `/health`               |      GET | Service health check         |
-| `/api/status`           |      GET | Model/engine status          |
-| `/api/documents`        |      GET | List documents               |
-| `/api/documents/upload` |     POST | Upload a document            |
-| `/api/search`           |     POST | Search indexed chunks        |
-| `/api/chat`             |     POST | RAG chat interface           |
-| `/api/chat/stream`      |     POST | Streaming chat interface     |
-| `/api/conversations`    | GET/POST | Conversation history         |
-| `/api/collections`      | GET/POST | Document collections         |
-| `/api/settings`         |  GET/PUT | Model and retrieval settings |
+| Endpoint                                        | Method             | Purpose                                                   |
+| ----------------------------------------------- | ------------------ | --------------------------------------------------------- |
+| `/health`, `/`                                  | GET                | Health and service metadata                               |
+| `/api/status`, `/api/models`                    | GET                | Ollama/model and document status; available Ollama models |
+| `/api/settings`                                 | GET, PUT           | Read or update assistant and retrieval settings           |
+| `/api/documents`                                | GET                | List documents                                            |
+| `/api/documents/upload`                         | POST               | Upload and schedule background ingestion                  |
+| `/api/documents/{id}`                           | GET, DELETE        | Read or delete a document                                 |
+| `/api/search`                                   | POST               | Search chunks using lexical ranking                       |
+| `/api/chat`, `/api/chat/stream`                 | POST               | Non-streaming or SSE chat                                 |
+| `/api/conversations`                            | GET, POST          | List or create conversations                              |
+| `/api/conversations/{id}`                       | GET, PATCH, DELETE | Read, rename, or delete a conversation                    |
+| `/api/collections`                              | GET, POST          | List or create collections                                |
+| `/api/collections/{id}`                         | PATCH, DELETE      | Rename or delete a collection                             |
+| `/api/collections/{id}/documents/{document_id}` | POST, DELETE       | Associate or dissociate a document                        |
+| `/api/activity`                                 | GET                | Read recent activity                                      |
 
-The API validates question and search lengths, retrieval counts, collection identifiers, model settings, and upload types with Pydantic and FastAPI.
+Pydantic validates chat/search input lengths and numeric ranges. File ingestion extracts PDF or text content; raster images currently have no OCR or image-understanding path.
 
 ---
 
@@ -419,28 +383,19 @@ llama3.2
 
 Used as the local language model for generating responses from retrieved context.
 
-Architecture:
+Current model responsibilities:
 
-```text
-                    Ollama
-                      │
-          ┌───────────┴───────────┐
-          │                       │
-          ▼                       ▼
-  nomic-embed-text             llama3.2
-          │                       │
-          ▼                       │
-     Embeddings                   │
-          │                       │
-          ▼                       │
-     Vector Search                │
-          │                       │
-          ▼                       │
-    Relevant Context ─────────────┘
-                  │
-                  ▼
-               Answer
+```mermaid
+flowchart LR
+   Ollama --> Embed[nomic-embed-text]
+   Ollama --> Generate[llama3.2]
+   Embed --> Stored[Optional embedding JSON in SQLite]
+   Chunks[SQLite text chunks] --> Rank[Lexical top-k ranking]
+   Rank --> Generate
+   Generate --> Answer[Streamed answer and source metadata]
 ```
+
+Stored embeddings are not used by the current search or chat retrieval algorithm.
 
 The repository's defaults specify both models as the intended local RAG stack. If Ollama is unavailable, document ingestion still completes and the API remains usable for non-generation features.
 
@@ -450,6 +405,11 @@ The repository's defaults specify both models as the intended local RAG stack. I
 
 ```text
 FRIDAY/
+│
+├── bin/
+│   ├── banner.js
+│   ├── chat.js
+│   └── friday.js
 │
 ├── .github/
 │   └── workflows/
@@ -463,6 +423,9 @@ FRIDAY/
 │   ├── Dockerfile
 │   ├── requirements.txt
 │   └── README.md
+│
+├── docs/
+│   └── architecture.md
 │
 ├── public/
 │   ├── file.svg
@@ -555,16 +518,16 @@ Text extraction
 Chunking
  │
  ▼
-Embedding generation
+Optional embedding generation
  │
  ▼
-Vector indexing
+SQLite chunk text and optional embedding JSON
  │
  ▼
-Knowledge Base
+Lexical token-overlap ranking
  │
  ▼
-Available for semantic retrieval
+Context for search and chat
 ```
 
 ---
@@ -592,13 +555,13 @@ Available for semantic retrieval
 
 ## AI / Retrieval
 
-| Technology         | Purpose                                |
-| ------------------ | -------------------------------------- |
-| Ollama             | Local AI runtime                       |
-| `nomic-embed-text` | Text embeddings                        |
-| `llama3.2`         | Local generation                       |
-| SQLite             | Persistent conversations and documents |
-| Lexical ranking    | Current chunk retrieval                |
+| Technology         | Purpose                                                                         |
+| ------------------ | ------------------------------------------------------------------------------- |
+| Ollama             | Local model runtime                                                             |
+| `nomic-embed-text` | Optional chunk embeddings stored with content; not used for retrieval currently |
+| `llama3.2`         | Chat generation                                                                 |
+| SQLite             | Persistent conversations, documents, chunks, settings, and activity             |
+| Lexical ranking    | Current chunk search and retrieval                                              |
 
 ## Engineering
 
@@ -616,28 +579,25 @@ Available for semantic retrieval
 
 ## Requirements
 
-Install:
+Required to run the CLI and local application:
 
 - Node.js 20+
-- npm 10+
+- npm (ships with Node.js)
 - Python 3.11+
 - Git
+- Ollama for model-backed chat and embedding generation
 
-Optional for local AI:
+The one-line installers install/check Git, Node.js, Python, and Ollama, then prepare the app and pull the default models. The Windows installer targets Python 3.12; the launcher accepts Python 3.11 or newer.
 
-- Ollama
-- `nomic-embed-text`
-- `llama3.2`
-
-These requirements match the current project setup.
+The defaults are `llama3.2:latest` for generation and `nomic-embed-text:latest` for embeddings. The web API can serve non-model features without Ollama, but chat generation requires an available Ollama model.
 
 ---
 
 ## 1. Clone the repository
 
 ```bash
-git clone https://github.com/veer-bajpai/AI-Personal-Assistant-LLM-Powered-Semantic-Search.git
-cd AI-Personal-Assistant-LLM-Powered-Semantic-Search
+git clone https://github.com/veer-bajpai/FRIDAY-Local-First-AI-Knowledge-Assistant.git
+cd FRIDAY-Local-First-AI-Knowledge-Assistant
 ```
 
 ---
@@ -664,11 +624,13 @@ Copy-Item .env.example .env.local
 cp .env.example .env.local
 ```
 
-Configure:
+Set the frontend API URL in `.env.local` for Next.js development:
 
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:8000
 ```
+
+The CLI passes runtime environment variables to the frontend and backend. It defaults `FRIDAY_DATA_DIR` to `~/.friday/data` and `OLLAMA_URL` to `http://localhost:11434`. The backend itself does not load `.env` files; set backend variables in the launching shell when running Uvicorn manually.
 
 ---
 
@@ -773,23 +735,16 @@ Verify:
 ollama list
 ```
 
-The intended local pipeline is:
+Current local model responsibilities:
 
-```text
-Friday
-  ↓
-FastAPI
-  ↓
-Ollama
-  ├── nomic-embed-text
-  │       ↓
-  │   Embeddings
-  │       ↓
-  │   Vector Retrieval
-  │
-  └── llama3.2
-          ↓
-      Response Generation
+```mermaid
+flowchart LR
+      API[FastAPI] -->|optional embedding request| Embed[Ollama nomic-embed-text]
+      Embed --> Store[Embedding JSON stored in SQLite]
+      API -->|chat request| Generate[Ollama llama3.2]
+      Chunks[SQLite text chunks] --> Rank[Lexical top-k retrieval]
+      Rank --> Generate
+      Generate --> Answer[Streamed answer]
 ```
 
 ---
@@ -1048,11 +1003,11 @@ GitHub:
 https://github.com/veer-bajpai
 
 Project:
-https://github.com/veer-bajpai/AI-Personal-Assistant-LLM-Powered-Semantic-Search
+https://github.com/veer-bajpai/FRIDAY-Local-First-AI-Knowledge-Assistant
 
 ---
 
 <p align="center">
   <strong>FRIDAY</strong><br/>
-  <em>Local intelligence. Semantic memory. One workspace.</em>
+   <em>Local intelligence. Searchable knowledge. One workspace.</em>
 </p>

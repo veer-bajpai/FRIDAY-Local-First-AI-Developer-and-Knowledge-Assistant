@@ -2,6 +2,12 @@
   "name": "friday-app",
   "version": "0.1.0",
   "private": true,
+  "bin": {
+    "friday": "bin/friday.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",

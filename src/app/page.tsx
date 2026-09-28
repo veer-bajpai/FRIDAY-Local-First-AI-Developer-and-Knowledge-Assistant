@@ -1,10 +1,10 @@
 "use client";
 
 import {
+  isValidElement,
   useEffect,
   useRef,
   useState,
-  type ReactElement,
   type ReactNode,
 } from "react";
 import ReactMarkdown from "react-markdown";
@@ -117,10 +117,22 @@ function isImageFile(file: File) {
   return file.type.startsWith("image/") || IMAGE_FILE_PATTERN.test(file.name);
 }
 
+function getTextContent(node: ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") {
+    return String(node);
+  }
+  if (Array.isArray(node)) {
+    return node.map(getTextContent).join("");
+  }
+  if (isValidElement<{ children?: ReactNode }>(node)) {
+    return getTextContent(node.props.children);
+  }
+  return "";
+}
+
 function MarkdownCodeBlock({ children }: { children?: ReactNode }) {
   const [copied, setCopied] = useState(false);
-  const codeElement = children as ReactElement<{ children?: ReactNode }>;
-  const code = String(codeElement?.props?.children ?? "").replace(/\n$/, "");
+  const code = getTextContent(children).replace(/\n$/, "");
 
   async function copyCode() {
     await navigator.clipboard.writeText(code);
