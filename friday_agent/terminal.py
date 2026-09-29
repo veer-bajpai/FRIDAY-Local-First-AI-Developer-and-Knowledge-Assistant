@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 import httpx
@@ -18,6 +19,13 @@ THEMES = {
     "ember": {"bg": "#151211", "panel": "#1d1917", "text": "#c6bdb8", "muted": "#85766f", "accent": "#9b7768"},
     "forest": {"bg": "#111512", "panel": "#181e19", "text": "#bdc6bf", "muted": "#758278", "accent": "#768c7b"},
 }
+
+# Chat labels
+USER_LABEL = "🐺 BOSS ›"
+AGENT_LABEL = "🌸 Friday ›"
+
+# Matches a "🐺 BOSS" style label the model may put at the start of any line
+_BOSS_LABEL = re.compile(r"^[ \t]*(?:🐺[ \t]*)?BOSS[ \t]*[:›\-–—]?[ \t]*", re.MULTILINE)
 
 
 class ApprovalScreen(ModalScreen[str]):
@@ -59,7 +67,7 @@ class ApprovalScreen(ModalScreen[str]):
 
 
 class FridayAgentApp(App[None]):
-    TITLE = "🐺 BOSS"
+    TITLE = "🌸 Friday"
     SUB_TITLE = "LOCAL CODING AGENT"
     BINDINGS = [Binding("ctrl+c", "quit_session", "Quit")]
     CSS = """
@@ -94,7 +102,7 @@ class FridayAgentApp(App[None]):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
-        yield Static("🐺  BOSS   /help for commands", id="brand")
+        yield Static("🌸  Friday   /help for commands", id="brand")
         yield RichLog(id="transcript", wrap=True, markup=False, highlight=False, max_lines=4000)
         yield Static("", id="stream")
         yield Static("Connecting to local Friday agent…", id="status")
@@ -108,7 +116,7 @@ class FridayAgentApp(App[None]):
             self.session_id = session["id"]
             self.mode = session["mode"]
             self.custom_commands = await self._json("GET", "/api/agent/commands")
-            self._write(f"🐺 BOSS  Local coding session · {session['model']} · {session['workspace']}")
+            self._write(f"🌸 Friday  Local coding session · {session['model']} · {session['workspace']}")
             self._update_status()
             self.query_one("#prompt", Input).focus()
         except Exception as exc:
@@ -142,6 +150,10 @@ class FridayAgentApp(App[None]):
 
     def _write(self, text: str) -> None:
         self.query_one("#transcript", RichLog).write(text)
+
+    def _clean_reply(self, text: str) -> str:
+        """Remove '🐺 BOSS' labels the model adds at the start of any line."""
+        return _BOSS_LABEL.sub("", text).lstrip()
 
     def _update_status(self) -> None:
         theme = THEMES[self.theme_name]
@@ -251,7 +263,7 @@ class FridayAgentApp(App[None]):
             raise ValueError(f"Unknown command /{name}. Try /help.")
 
     async def _run_turn(self, prompt: str) -> None:
-        self._write(f"you › {prompt}")
+        self._write(f"{USER_LABEL} {prompt}")
         self.output = ""
         stream = self.query_one("#stream", Static)
         stream.update("")
@@ -263,7 +275,7 @@ class FridayAgentApp(App[None]):
                     continue
                 await self._event(json.loads(line[6:]))
         if self.output:
-            self._write(self.output)
+            self._write(f"{AGENT_LABEL} {self._clean_reply(self.output)}")
         stream.update("")
 
     async def _event(self, event: dict[str, Any]) -> None:
@@ -273,7 +285,7 @@ class FridayAgentApp(App[None]):
             self._update_status()
         elif kind == "token":
             self.output += event.get("content", "")
-            self.query_one("#stream", Static).update(self.output)
+            self.query_one("#stream", Static).update(f"{AGENT_LABEL} {self._clean_reply(self.output)}")
         elif kind == "tool_start":
             args = event.get("arguments", {})
             detail = args.get("command") or args.get("path") or ""

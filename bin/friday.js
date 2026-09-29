@@ -349,7 +349,9 @@ async function runChat({ agent = false } = {}) {
         stdio: "inherit",
       });
       terminal.on("error", (error) => {
-        console.error(`Could not start the Friday terminal UI: ${error.message}`);
+        console.error(
+          `Could not start the Friday terminal UI: ${error.message}`,
+        );
         resolve(1);
       });
       terminal.on("exit", (status) => resolve(status || 0));

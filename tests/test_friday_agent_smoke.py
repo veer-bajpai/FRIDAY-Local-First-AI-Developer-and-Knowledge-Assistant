@@ -1,5 +1,9 @@
 import asyncio
+import json
 import sys
+import subprocess
+import types
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
@@ -176,3 +180,272 @@ def test_parallel_subagent_tool_is_bounded_and_read_only():
     assert result == "inspect A,inspect B"
     with pytest.raises(ToolError):
         run(build_tools()["spawn_subagent"].run({"tasks": ["a"] * 5}, context))
+
+def test_git_tools_work_in_an_isolated_repository(tmp_path: Path, monkeypatch):
+    from friday_agent import git_ops
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Friday Tests"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.email", "friday-tests@example.invalid"], cwd=root, check=True)
+    sample = root / "sample.txt"
+    sample.write_text("before\n")
+    subprocess.run(["git", "add", "sample.txt"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=root, check=True, capture_output=True)
+    sample.write_text("after\n")
+
+    context = Context(root=root.resolve())
+    assert "before" in run(git_ops.git_review_diff({}, context))
+    assert run(git_ops.git_branch({"name": "feature/test"}, context))
+    assert subprocess.run(
+        ["git", "branch", "--show-current"], cwd=root, check=True, capture_output=True, text=True
+    ).stdout.strip() == "feature/test"
+    assert "update sample" in run(git_ops.git_commit({"message": "update sample"}, context))
+    assert not subprocess.run(
+        ["git", "status", "--porcelain"], cwd=root, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    assert "Worktrees ready" in run(batch_worktrees({"tasks": ["parallel-check"]}, context))
+    assert (tmp_path / "repo-wt-parallel-check").is_dir()
+
+    commands = []
+
+    async def fake_run(ctx, *args, cwd=None):
+        commands.append(args)
+        return "ok"
+
+    monkeypatch.setattr(git_ops, "_run", fake_run)
+    assert run(git_ops.git_review_diff({"pr": 42}, context)) == "ok"
+    with pytest.raises(ToolError, match="positive integer"):
+        run(git_ops.git_review_diff({"pr": "invalid"}, context))
+    assert "ok" in run(git_ops.create_pr({"title": "Title", "body": "Body"}, context))
+    assert commands == [
+        ("gh", "pr", "diff", "42"),
+        ("git", "push", "-u", "origin", "HEAD"),
+        ("gh", "pr", "create", "--title", "Title", "--body", "Body"),
+    ]
+
+def test_mcp_manager_registers_tools_without_starting_a_real_server(tmp_path: Path, monkeypatch):
+    from friday_agent.mcp_client import MCPManager
+
+    config_path = tmp_path / "mcp.json"
+    config_path.write_text(json.dumps({"servers": {"test": {"command": "fake-server"}}}))
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def initialize(self):
+            return None
+
+        async def list_tools(self):
+            definition = types.SimpleNamespace(
+                name="echo", description="Echo test input", inputSchema={"type": "object"}
+            )
+            return types.SimpleNamespace(tools=[definition])
+
+        async def call_tool(self, name, args):
+            return types.SimpleNamespace(
+                isError=False, content=[types.SimpleNamespace(text=f"{name}: {args['value']}")]
+            )
+
+    @asynccontextmanager
+    async def fake_stdio_client(params):
+        assert params.command == "fake-server"
+        yield object(), object()
+
+    mcp_module = types.ModuleType("mcp")
+    mcp_module.ClientSession = lambda *_args: FakeSession()
+    mcp_module.StdioServerParameters = lambda **kwargs: types.SimpleNamespace(**kwargs)
+    client_module = types.ModuleType("mcp.client")
+    stdio_module = types.ModuleType("mcp.client.stdio")
+    stdio_module.stdio_client = fake_stdio_client
+    monkeypatch.setitem(sys.modules, "mcp", mcp_module)
+    monkeypatch.setitem(sys.modules, "mcp.client", client_module)
+    monkeypatch.setitem(sys.modules, "mcp.client.stdio", stdio_module)
+
+    async def exercise():
+        manager = MCPManager(config_path)
+        await manager.start()
+        tool = manager.tools["mcp__test__echo"]
+        result = await tool.run({"value": "works"}, Context(root=tmp_path.resolve()))
+        await manager.close()
+        return result
+
+    assert run(exercise()) == "echo: works"
+
+def test_voice_input_transcribes_with_local_dependencies_mocked(monkeypatch):
+    from friday_agent import voice
+
+    class FakeAudio:
+        def reshape(self, *_shape):
+            return "audio-samples"
+
+    sounddevice = types.ModuleType("sounddevice")
+    sounddevice.rec = lambda *args, **kwargs: FakeAudio()
+    sounddevice.wait = lambda: None
+    numpy = types.ModuleType("numpy")
+    numpy.asarray = lambda audio: audio
+    faster_whisper = types.ModuleType("faster_whisper")
+    faster_whisper.WhisperModel = object
+    monkeypatch.setitem(sys.modules, "sounddevice", sounddevice)
+    monkeypatch.setitem(sys.modules, "numpy", numpy)
+    monkeypatch.setitem(sys.modules, "faster_whisper", faster_whisper)
+
+    class FakeModel:
+        def transcribe(self, audio):
+            assert audio == "audio-samples"
+            return [types.SimpleNamespace(text=" hello "), types.SimpleNamespace(text="Friday")], None
+
+    monkeypatch.setattr(voice, "_model", lambda: FakeModel())
+    assert voice.listen(seconds=2) == "hello Friday"
+    with pytest.raises(ValueError, match="between 1 and 30 seconds"):
+        voice.listen(seconds=0)
+
+def test_insights_report_ignores_bad_rows_and_escapes_tool_names(tmp_path: Path, monkeypatch):
+    from friday_agent import insights
+
+    root = tmp_path / "workspace"
+    usage = root / ".friday" / "usage.jsonl"
+    usage.parent.mkdir(parents=True)
+    usage.write_text(
+        json.dumps({"tool": "<script>alert(1)</script>", "ok": False}) + "\nnot-json\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(insights, "HOME", tmp_path / "home")
+
+    report = insights.build_report(root)
+    content = report.read_text(encoding="utf-8")
+    assert report.is_file()
+    assert "1 recorded tool calls" in content
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in content
+    assert "<script>alert(1)</script>" not in content
+
+def test_agent_http_session_and_integration_routes_are_mockable(tmp_path: Path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from backend.app import agent_routes
+
+    root = tmp_path / "workspace"
+    (root / ".friday" / "commands").mkdir(parents=True)
+    (root / ".friday" / "commands" / "check.md").write_text("Run checks")
+    monkeypatch.setattr(agent_routes, "PROJECT_ROOT", root)
+    monkeypatch.setattr(agent_routes, "SESSIONS", {})
+
+    async def fake_models():
+        return ["test-model"]
+
+    turn_prompts = []
+
+    async def fake_run_turn(session, prompt, reserved=False):
+        turn_prompts.append(prompt)
+        yield {"type": "token", "content": f"handled: {prompt}"}
+        yield {"type": "done", "mode": session.mode, "todos": [], "undo_count": 0}
+
+    async def fake_compact(session):
+        return "Session summary"
+
+    monkeypatch.setattr(agent_routes, "list_models", fake_models)
+    monkeypatch.setattr(agent_routes, "run_turn", fake_run_turn)
+    monkeypatch.setattr(agent_routes, "compact_session", fake_compact)
+    monkeypatch.setattr(agent_routes, "listen", lambda: "voice text")
+    report = root / "insights.html"
+    monkeypatch.setattr(agent_routes, "build_report", lambda _root: report)
+    opened = []
+    monkeypatch.setattr(agent_routes.webbrowser, "open", lambda uri: opened.append(uri))
+
+    app = FastAPI()
+    app.include_router(agent_routes.router)
+    app.dependency_overrides[agent_routes.require_local_agent_request] = lambda: None
+    with TestClient(app) as client:
+        headers = {"origin": "http://localhost:3000"}
+        assert client.get("/api/agent/models", headers=headers).json()["models"] == ["test-model"]
+        assert client.get("/api/agent/commands", headers=headers).json() == {"check": "Run checks"}
+        assert client.post("/api/agent/voice", headers=headers).json() == {"text": "voice text"}
+        assert client.get("/api/agent/insights", headers=headers).json()["path"] == str(report)
+        assert opened == [report.as_uri()]
+
+        first = client.post("/api/agent/sessions", headers=headers, json={"mode": "default"})
+        second = client.post("/api/agent/sessions", headers=headers, json={"mode": "default"})
+        assert first.status_code == second.status_code == 200
+        first_id, second_id = first.json()["id"], second.json()["id"]
+        assert len(client.get("/api/agent/sessions", headers=headers).json()) == 2
+        assert client.get(f"/api/agent/sessions/{first_id}", headers=headers).json()["id"] == first_id
+        assert client.patch(
+            f"/api/agent/sessions/{first_id}", headers=headers, json={"mode": "plan"}
+        ).json()["mode"] == "plan"
+        assert client.get(f"/api/agent/sessions/{first_id}/context", headers=headers).status_code == 200
+
+        delivered = run(
+            agent_routes.SESSIONS[first_id].context.session_message_runner(second_id[:8], "coordinate")
+        )
+        assert "Message delivered" in delivered
+        response = client.post(
+            f"/api/agent/sessions/{second_id}/turns", headers=headers, json={"prompt": "hello"}
+        )
+        assert response.status_code == 200
+        assert "handled: [message from agent" in response.text
+        assert "hello" in response.text
+        assert "text/event-stream" in response.headers["content-type"]
+        assert "coordinate" in turn_prompts[-1]
+        assert client.post(f"/api/agent/sessions/{first_id}/compact", headers=headers).json()["summary"] == "Session summary"
+
+        first_session = agent_routes.SESSIONS[first_id]
+        async def approve_pending_call():
+            future = asyncio.get_running_loop().create_future()
+            first_session.pending_approvals["pending"] = future
+            response = await agent_routes.approve_tool_call(
+                first_id, "pending", agent_routes.ApprovalRequest(decision="always")
+            )
+            assert future.result() == "always"
+            return response
+
+        assert run(approve_pending_call())["decision"] == "always"
+
+        rewind_file = root / "rewound.txt"
+        rewind_file.write_text("created")
+        first_session.messages.extend([
+            {"role": "user", "content": "create file"},
+            {"role": "assistant", "content": "done"},
+        ])
+        first_session.context.checkpoints.append((rewind_file, None))
+        first_session.context.turns.append({
+            "msg_index": 1, "label": "create file", "files": [(rewind_file, None)]
+        })
+        rewind_response = client.post(
+            f"/api/agent/sessions/{first_id}/rewind", headers=headers, json={"count": 1}
+        )
+        assert rewind_response.json()["rewound"] == ["create file"]
+        assert not rewind_file.exists()
+
+        changed = root / "reversible.txt"
+        changed.write_text("created")
+        first_session.context.checkpoints.append((changed, None))
+        assert client.post(f"/api/agent/sessions/{first_id}/undo", headers=headers).status_code == 200
+        assert not changed.exists()
+        assert client.delete(f"/api/agent/sessions/{first_id}", headers=headers).json() == {"deleted": True}
+        assert client.delete(f"/api/agent/sessions/{second_id}", headers=headers).json() == {"deleted": True}
+
+def test_local_agent_api_rejects_remote_client_with_spoofed_local_origin():
+    from fastapi import HTTPException
+    from starlette.requests import Request
+
+    from backend.app.agent_routes import require_local_agent_request
+
+    def request_for(client, origin=None):
+        headers = [(b"origin", origin.encode())] if origin else []
+        return Request({
+            "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+            "method": "GET", "scheme": "http", "path": "/", "raw_path": b"/",
+            "query_string": b"", "headers": headers, "client": client,
+            "server": ("localhost", 8000),
+        })
+
+    require_local_agent_request(request_for(("127.0.0.1", 1234), "http://localhost:3000"))
+    with pytest.raises(HTTPException) as exc:
+        require_local_agent_request(request_for(("203.0.113.8", 1234), "http://localhost:3000"))
+    assert exc.value.status_code == 403

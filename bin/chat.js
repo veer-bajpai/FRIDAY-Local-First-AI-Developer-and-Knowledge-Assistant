@@ -17,6 +17,7 @@ const dim = (s) => paint256(240, s),
 const red = (s) => paint256(131, s),
   yellow = (s) => paint256(179, s),
   bold = (s) => paint(1, s);
+const ASSISTANT_LABEL = "🌸 Friday ›";
 
 const HELP = `
   ${bold("Commands")}
@@ -58,7 +59,7 @@ async function start({ api, args = [] }) {
   async function ask(question) {
     controller = new AbortController();
     let failed = false;
-    process.stdout.write("\n" + green("🐺 BOSS › "));
+    process.stdout.write("\n" + green(`${ASSISTANT_LABEL} `));
     let res;
     try {
       res = await fetch(api + "/api/chat/stream", {
@@ -190,7 +191,9 @@ async function start({ api, args = [] }) {
         console.log(bold("\n  " + conv.title) + "\n");
         for (const m of conv.messages)
           console.log(
-            (m.role === "user" ? cyan("you › ") : green("🐺 BOSS › ")) +
+            (m.role === "user"
+              ? cyan("you › ")
+              : green(`${ASSISTANT_LABEL} `)) +
               m.content +
               "\n",
           );

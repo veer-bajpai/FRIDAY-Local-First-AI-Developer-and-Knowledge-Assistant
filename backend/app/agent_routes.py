@@ -47,7 +47,6 @@ def require_local_agent_request(request: Request) -> None:
         parsed = urlsplit(origin)
         if parsed.scheme not in {"http", "https"} or parsed.hostname not in LOCAL_HOSTS:
             raise HTTPException(status_code=403, detail="Agent access is restricted to local browsers.")
-        return
 
     host = request.client.host if request.client else ""
     try:
