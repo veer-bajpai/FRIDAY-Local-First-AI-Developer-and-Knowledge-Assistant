@@ -1,9 +1,13 @@
 import json
+import re
 import subprocess
 import sys
 
 event = json.load(sys.stdin)
-if event.get("tool") == "git_commit":
+tool = event.get("tool", "")
+command = (event.get("args") or {}).get("command", "")
+is_commit = tool == "git_commit" or (tool in {"bash", "run_bash"} and re.search(r"\bgit\s+commit\b", command))
+if is_commit:
     result = subprocess.run(
         [sys.executable, "-m", "ruff", "check", "."],
         capture_output=True,

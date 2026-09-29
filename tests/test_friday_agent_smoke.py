@@ -96,6 +96,28 @@ def test_git_tool_registration_and_batch_input_validation(tmp_path: Path):
     with pytest.raises(ToolError):
         run(batch_worktrees({"tasks": ["Bad Name"]}, Context(root=tmp_path.resolve())))
 
+def test_fullscreen_terminal_app_mounts_without_live_backend():
+    pytest.importorskip("textual")
+    from friday_agent.terminal import FridayAgentApp
+
+    app = FridayAgentApp(api="http://127.0.0.1:1")
+
+    async def fake_json(method, path, body=None):
+        if path == "/api/agent/sessions":
+            return {"id": "test-session", "mode": "default", "model": "test-model", "workspace": "test"}
+        if path == "/api/agent/commands":
+            return {}
+        return {}
+
+    async def run_app():
+        app._json = fake_json
+        async with app.run_test() as pilot:
+            assert app.query_one("#transcript")
+            assert app.query_one("#prompt").disabled is False
+            await pilot.press("tab")
+
+    run(run_app())
+
 def test_pre_tool_hook_blocks_and_rewind_restores_turn(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("friday_agent.config.HOME", tmp_path / "home")
     monkeypatch.setattr("friday_agent.permissions.HOME", tmp_path / "home")

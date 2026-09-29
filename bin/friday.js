@@ -340,8 +340,24 @@ async function runChat({ agent = false } = {}) {
       die(`Backend did not start. Check ${path.join(HOME_DIR, "backend.log")}`);
     }
   }
-  const client = agent ? require("./agent.js") : require("./chat.js");
-  const code = await client.start({ api, args });
+  let code;
+  if (agent && !args.some((arg) => arg === "-p" || arg === "--print")) {
+    code = await new Promise((resolve) => {
+      const terminal = spawn(venvPy, ["-m", "friday_agent.terminal"], {
+        cwd: APP_DIR,
+        env: buildEnv(),
+        stdio: "inherit",
+      });
+      terminal.on("error", (error) => {
+        console.error(`Could not start the Friday terminal UI: ${error.message}`);
+        resolve(1);
+      });
+      terminal.on("exit", (status) => resolve(status || 0));
+    });
+  } else {
+    const client = agent ? require("./agent.js") : require("./chat.js");
+    code = await client.start({ api, args });
+  }
   if (backend) killTree(backend);
   if (ollamaChild) killTree(ollamaChild);
   process.exit(code || 0);

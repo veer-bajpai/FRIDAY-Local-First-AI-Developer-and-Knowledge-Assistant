@@ -9,6 +9,11 @@
   "hooks": {
     "PreToolUse": [
       {
+        "matcher": "bash",
+        "command": "python .friday/hooks/pre_commit_lint.py",
+        "timeout": 120
+      },
+      {
         "matcher": "git_commit",
         "command": "python .friday/hooks/pre_commit_lint.py",
         "timeout": 120
