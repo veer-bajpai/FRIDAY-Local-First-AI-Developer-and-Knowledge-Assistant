@@ -65,7 +65,7 @@ The frontend and terminal client use the same API and persistent data. The backe
 - The terminal client in `bin/chat.js` streams the same `/api/chat/stream` events and reads/writes the same conversations as the web client.
 - `friday update` runs `git pull --ff-only` and clears the setup stamps so dependencies/build can be refreshed.
 - Setup state is stored in `~/.friday/state.json`; the CLI virtual environment is `~/.friday/venv`.
-- The banner is implemented in `bin/banner.js`. `FRIDAY_THEME` selects the dark mascot palette; `FRIDAY_MASCOT=0` hides the mascot; `FRIDAY_NO_BANNER=1` disables the banner. The mascot is skipped below 80 columns and rendered without color when fewer than 256 colors are available. The banner is also suppressed for non-TTY output and when `NO_COLOR` is set. One-shot chat and `friday update` do not print the banner.
+- The banner is implemented in `bin/banner.js`. `FRIDAY_THEME` selects its palette; `FRIDAY_MASCOT=0` hides the avatar; `FRIDAY_NO_BANNER=1` disables it. It is also suppressed for non-TTY output and when `NO_COLOR` is set. One-shot chat and `friday update` do not print the banner.
 
 ### API and persistence
 
@@ -183,7 +183,7 @@ The CLI runs the frontend and backend as local processes. Ollama is detected sep
 | `FRIDAY_EMBED_MODEL`     | CLI/backend initialization | Embedding model; `nomic-embed-text:latest` backend default                                      |
 | `FRIDAY_MAX_TOKENS`      | FastAPI backend            | Maximum generated chat tokens; defaults to `128` for faster responses                           |
 | `FRIDAY_ALLOWED_ORIGINS` | FastAPI                    | Comma-separated additional CORS origins; known local and deployed frontend origins are retained |
-| `FRIDAY_THEME`           | CLI banner                 | `gray` (default), `blue`, `green`, or `red` dark 256-color mascot ramp                          |
+| `FRIDAY_THEME`           | CLI banner                 | `cyan`, `orange`, `green`, or `purple`                                                          |
 | `FRIDAY_MASCOT`          | CLI banner                 | Set to `0` to hide the avatar                                                                   |
 | `FRIDAY_NO_BANNER`       | CLI banner                 | Set to `1` to disable the banner                                                                |
 | `NO_COLOR`               | CLI banner                 | Any value disables banner output                                                                |

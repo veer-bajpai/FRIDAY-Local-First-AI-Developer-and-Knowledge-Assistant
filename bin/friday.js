@@ -54,7 +54,7 @@ if (args.includes("-h") || args.includes("--help")) {
   friday update       Pull the latest version (rebuilds on next start)
   friday --version    Print version
 
-Set FRIDAY_THEME=gray|blue|green|red to change the dark mascot palette; FRIDAY_NO_BANNER=1 hides the banner.
+Set FRIDAY_THEME=cyan|orange|green|purple to change banner colour; FRIDAY_NO_BANNER=1 hides it.
 Terminal chat shares history with the web UI. Data: ~/.friday/data (override with FRIDAY_DATA_DIR)`);
   process.exit(0);
 }

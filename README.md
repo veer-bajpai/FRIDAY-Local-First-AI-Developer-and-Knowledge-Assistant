@@ -110,7 +110,7 @@ Useful commands:
 | `friday setup`              | Install/cache dependencies, build, and prepare Ollama models |
 | `friday update`             | Fast-forward the CLI checkout and invalidate setup stamps    |
 
-Terminal chat supports `/new`, `/history`, `/resume <n|id>`, `/docs`, `/status`, `/sources on|off`, `/k <1-20>`, `/clear`, `/help`, and `/exit`. Banner options: `FRIDAY_THEME=gray|blue|green|red` (gray by default), `FRIDAY_MASCOT=0`, `FRIDAY_NO_BANNER=1`; `NO_COLOR` and non-TTY output also suppress the banner. The mascot is skipped below 80 columns, and rendered without color when fewer than 256 colors are available.
+Terminal chat supports `/new`, `/history`, `/resume <n|id>`, `/docs`, `/status`, `/sources on|off`, `/k <1-20>`, `/clear`, `/help`, and `/exit`. Banner options: `FRIDAY_THEME=cyan|orange|green|purple`, `FRIDAY_MASCOT=0`, `FRIDAY_NO_BANNER=1`; `NO_COLOR` and non-TTY output also suppress the banner.
 
 ### Image uploads
 
