@@ -1,3 +1,42 @@
+# FRIDAY: Local-First AI Developer & Knowledge Assistant
+
+<p align="center">
+  <strong>F.R.I.D.A.Y.</strong><br/>
+  <em>Fast Retrieval, Intelligent Dialogue & Autonomous Yield</em>
+</p>
+
+<p align="center">
+   A local-first AI workspace for conversational assistance, document search, document intelligence, and retrieval-augmented generation.
+</p>
+
+<p align="center">
+   <img src="https://img.shields.io/badge/Next.js-16-black?style=for-the-badge&logo=next.js" alt="Next.js"/>
+  <img src="https://img.shields.io/badge/React-TypeScript-blue?style=for-the-badge&logo=react" alt="React"/>
+  <img src="https://img.shields.io/badge/FastAPI-Python-009688?style=for-the-badge&logo=fastapi" alt="FastAPI"/>
+  <img src="https://img.shields.io/badge/Ollama-Local%20AI-white?style=for-the-badge" alt="Ollama"/>
+   <img src="https://img.shields.io/badge/RAG-Lexical%20Retrieval-purple?style=for-the-badge" alt="RAG"/>
+  <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="MIT License"/>
+</p>
+
+---
+
+## 🧠 What is Friday?
+
+**Friday** is a local-first personal AI workspace designed to combine conversational AI with document intelligence and lexical retrieval.
+
+Instead of treating an AI assistant as only a chat window, Friday is designed as a complete knowledge workspace where users can:
+
+- 💬 Chat with a local AI assistant
+- 📄 Upload and manage documents
+- 🔎 Search indexed document chunks
+- 🧠 Retrieve relevant document context
+- 📚 Ground AI responses in user-provided sources
+- 📊 Inspect assistant activity
+- 🕘 Access conversation history
+- ⚙️ Configure retrieval and model settings
+- 🔒 Keep sensitive knowledge inside the local environment
+
+The application is built around a **frontend → API → retrieval → model** architecture, allowing the user interface and AI engine to evolve independently.
 ## Quick start
 
 Windows (PowerShell):
@@ -54,46 +93,6 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 The installer is not an offline bundle: dependencies and AI models are downloaded during setup. `winget` must already be available through Windows App Installer.
 
 See [Architecture](docs/architecture.md) for the implemented service boundaries, startup sequence, data flows, API routes, deployment modes, and current retrieval limitations. See [Backend guide](backend/README.md) for direct API development.
-
-# FRIDAY: Local-First AI Developer & Knowledge Assistant
-
-<p align="center">
-  <strong>F.R.I.D.A.Y.</strong><br/>
-  <em>Fast Retrieval, Intelligent Dialogue & Autonomous Yield</em>
-</p>
-
-<p align="center">
-   A local-first AI workspace for conversational assistance, document search, document intelligence, and retrieval-augmented generation.
-</p>
-
-<p align="center">
-   <img src="https://img.shields.io/badge/Next.js-16-black?style=for-the-badge&logo=next.js" alt="Next.js"/>
-  <img src="https://img.shields.io/badge/React-TypeScript-blue?style=for-the-badge&logo=react" alt="React"/>
-  <img src="https://img.shields.io/badge/FastAPI-Python-009688?style=for-the-badge&logo=fastapi" alt="FastAPI"/>
-  <img src="https://img.shields.io/badge/Ollama-Local%20AI-white?style=for-the-badge" alt="Ollama"/>
-   <img src="https://img.shields.io/badge/RAG-Lexical%20Retrieval-purple?style=for-the-badge" alt="RAG"/>
-  <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="MIT License"/>
-</p>
-
----
-
-## 🧠 What is Friday?
-
-**Friday** is a local-first personal AI workspace designed to combine conversational AI with document intelligence and lexical retrieval.
-
-Instead of treating an AI assistant as only a chat window, Friday is designed as a complete knowledge workspace where users can:
-
-- 💬 Chat with a local AI assistant
-- 📄 Upload and manage documents
-- 🔎 Search indexed document chunks
-- 🧠 Retrieve relevant document context
-- 📚 Ground AI responses in user-provided sources
-- 📊 Inspect assistant activity
-- 🕘 Access conversation history
-- ⚙️ Configure retrieval and model settings
-- 🔒 Keep sensitive knowledge inside the local environment
-
-The application is built around a **frontend → API → retrieval → model** architecture, allowing the user interface and AI engine to evolve independently.
 
 ## Local services
 
