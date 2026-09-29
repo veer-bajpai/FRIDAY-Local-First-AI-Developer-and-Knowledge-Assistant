@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from friday_agent.config import DEFAULT_MODEL, MAX_STEPS, MODES, NUM_CTX
+from friday_agent.config import DEFAULT_MODEL, MAX_STEPS, MODES, NUM_CTX, load_custom_commands
 from friday_agent.engine import (
     AgentSession, compact_session, context_report, create_session, rewind,
     run_turn, undo,
@@ -105,6 +105,11 @@ async def agent_models() -> dict:
         "num_ctx": NUM_CTX,
         "workspace": PROJECT_ROOT.name,
     }
+
+
+@router.get("/api/agent/commands", dependencies=[Depends(require_local_agent_request)])
+async def agent_commands() -> dict[str, str]:
+    return load_custom_commands(PROJECT_ROOT)
 
 
 @router.post("/api/agent/sessions", dependencies=[Depends(require_local_agent_request)])

@@ -1,9 +1,9 @@
 "use strict";
 /* eslint-disable @typescript-eslint/no-require-imports */
 /**
- * Startup banner for FRIDAY: pink block letters and status text.
+ * Startup banner for FRIDAY: muted dark-theme block letters and status text.
  * Auto-skipped when output isn't a terminal, NO_COLOR is set, or FRIDAY_NO_BANNER=1.
- *   FRIDAY_THEME  = pink (default) | cyan | orange | green | purple
+ *   FRIDAY_THEME  = midnight (default) | ember | forest
  */
 const os = require("os");
 const path = require("path");
@@ -18,20 +18,18 @@ const LOGO = [
   "╚═╝     ╚═╝  ╚═╝╚═╝╚═════╝ ╚═╝  ╚═╝   ╚═╝   ",
 ];
 const THEMES = {
-  pink: { from: [228, 112, 158], to: [180, 72, 120], basic: 35 },
-  cyan: { from: [0, 229, 255], to: [41, 121, 255], basic: 36 },
-  orange: { from: [240, 150, 110], to: [204, 95, 60], basic: 33 },
-  green: { from: [105, 240, 174], to: [0, 200, 120], basic: 32 },
-  purple: { from: [206, 147, 255], to: [124, 77, 255], basic: 35 },
+  midnight: { from: [108, 122, 140], to: [77, 89, 105], basic: 90 },
+  ember: { from: [151, 112, 99], to: [105, 75, 69], basic: 31 },
+  forest: { from: [111, 132, 112], to: [70, 91, 76], basic: 32 },
 };
 
 const RESET = "\x1b[0m";
 const HUD = {
-  cyan: "\x1b[38;5;45m",
-  orange: "\x1b[38;5;208m",
-  red: "\x1b[38;5;196m",
-  white: "\x1b[38;5;255m",
-  gray: "\x1b[38;5;242m",
+  cyan: "\x1b[38;5;67m",
+  orange: "\x1b[38;5;137m",
+  red: "\x1b[38;5;131m",
+  white: "\x1b[38;5;252m",
+  gray: "\x1b[38;5;240m",
   bold: "\x1b[1m",
 };
 const truecolor = () =>
@@ -122,7 +120,7 @@ function printBanner({ version = "", mode = "" } = {}) {
     return;
 
   const theme =
-    THEMES[(process.env.FRIDAY_THEME || "pink").toLowerCase()] || THEMES.pink;
+    THEMES[(process.env.FRIDAY_THEME || "midnight").toLowerCase()] || THEMES.midnight;
   const cols = process.stdout.columns || 80;
   const tc = truecolor();
   const letter = (i) => {
@@ -143,8 +141,7 @@ function printBanner({ version = "", mode = "" } = {}) {
     second: "2-digit",
   });
   const exitCode = Number.isInteger(process.exitCode) ? process.exitCode : 0;
-  const core =
-    exitCode === 0 ? `${HUD.cyan}◖ 🌟 ◗${RESET}` : `${HUD.red}⎔ ⚠️ ⎔${RESET}`;
+  const core = `${exitCode === 0 ? HUD.cyan : HUD.red}🐺 BOSS${RESET}`;
   const status =
     exitCode === 0
       ? `${HUD.cyan}ONLINE // SYSTEMS NOMINAL${RESET}`

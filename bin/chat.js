@@ -11,11 +11,11 @@ const tty = process.stdout.isTTY;
 const paint = (n, s) => (tty ? `\x1b[${n}m${s}\x1b[0m` : s);
 const paint256 = (n, s) =>
   tty && !process.env.NO_COLOR ? `\x1b[38;5;${n}m${s}\x1b[0m` : s;
-const dim = (s) => paint(90, s),
-  cyan = (s) => paint(36, s),
-  green = (s) => paint(32, s);
-const red = (s) => paint(31, s),
-  yellow = (s) => paint(33, s),
+const dim = (s) => paint256(240, s),
+  cyan = (s) => paint256(67, s),
+  green = (s) => paint256(108, s);
+const red = (s) => paint256(131, s),
+  yellow = (s) => paint256(179, s),
   bold = (s) => paint(1, s);
 
 const HELP = `
@@ -40,9 +40,8 @@ async function start({ api, args = [] }) {
   let controller = null;
   let lastExitCode = 0;
   const promptForStatus = (exitCode) => {
-    const core =
-      exitCode === 0 ? paint256(45, "◖ 🌟 ◗") : paint256(196, "⎔ ⚠️ ⎔");
-    return `${paint256(242, "⚙")} ${core} ${paint256(45, "friday")}${paint256(255, "❯")} `;
+    const core = paint256(exitCode === 0 ? 108 : 137, "🐺 BOSS");
+    return `${paint256(240, "⚙")} ${core} ${paint256(244, "❯")} `;
   };
 
   const call = async (method, path, body) => {
@@ -59,7 +58,7 @@ async function start({ api, args = [] }) {
   async function ask(question) {
     controller = new AbortController();
     let failed = false;
-    process.stdout.write("\n" + green("friday › "));
+    process.stdout.write("\n" + green("🐺 BOSS › "));
     let res;
     try {
       res = await fetch(api + "/api/chat/stream", {
@@ -191,7 +190,7 @@ async function start({ api, args = [] }) {
         console.log(bold("\n  " + conv.title) + "\n");
         for (const m of conv.messages)
           console.log(
-            (m.role === "user" ? cyan("you › ") : green("friday › ")) +
+            (m.role === "user" ? cyan("you › ") : green("🐺 BOSS › ")) +
               m.content +
               "\n",
           );

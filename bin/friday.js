@@ -30,7 +30,12 @@ const CHAT_MODEL = process.env.FRIDAY_MODEL || "llama3.2";
 const EMBED_MODEL = process.env.FRIDAY_EMBED_MODEL || "nomic-embed-text";
 const VERSION = require(path.join(APP_DIR, "package.json")).version;
 
-const c = (n, s) => (process.stdout.isTTY ? `\x1b[${n}m${s}\x1b[0m` : s);
+const ANSI_256 = { 31: 131, 32: 108, 33: 179, 36: 67, 90: 240 };
+const c = (n, s) => {
+  if (!process.stdout.isTTY) return s;
+  if (n === 1) return `\x1b[1m${s}\x1b[0m`;
+  return `\x1b[38;5;${ANSI_256[n] || 240}m${s}\x1b[0m`;
+};
 const info = (m) => console.log(c(36, "▸ ") + m);
 const ok = (m) => console.log(c(32, "✔ ") + m);
 const warn = (m) => console.log(c(33, "! ") + m);
@@ -50,11 +55,13 @@ if (args.includes("-h") || args.includes("--help")) {
   friday --no-open    Start browser mode without opening a browser tab
   friday chat         Chat with FRIDAY right in the terminal (no browser)
   friday chat -p "…"  Ask one question, print the answer, exit
+  friday agent        Run the local coding agent in the terminal
+  friday agent -p "…" Run one coding-agent task, print the answer, exit
   friday setup        Install dependencies, build, and download Ollama models
   friday update       Pull the latest version (rebuilds on next start)
   friday --version    Print version
 
-Set FRIDAY_THEME=pink|cyan|orange|green|purple to change banner colour (pink by default); FRIDAY_NO_BANNER=1 hides it. The terminal HUD shows live time, battery, git branch, and command status.
+Set FRIDAY_THEME=midnight|ember|forest to change the muted dark banner; FRIDAY_NO_BANNER=1 hides it. The terminal HUD shows live time, battery, git branch, and command status.
 Terminal chat shares history with the web UI. Data: ~/.friday/data (override with FRIDAY_DATA_DIR)`);
   process.exit(0);
 }
@@ -63,7 +70,7 @@ if (args.includes("-v") || args.includes("--version")) {
   process.exit(0);
 }
 
-const KNOWN_COMMANDS = ["browser", "web", "start", "chat", "setup", "update"];
+const KNOWN_COMMANDS = ["browser", "web", "start", "chat", "agent", "setup", "update"];
 if (cmd && !KNOWN_COMMANDS.includes(cmd)) {
   die(
     `Unknown command "${cmd}". Try: friday browser | friday chat | friday --help`,
@@ -295,7 +302,7 @@ const killTree = (ch) => {
 };
 
 // ---------- terminal chat: reuse a running backend, or start one quietly ----------
-async function runChat() {
+async function runChat({ agent = false } = {}) {
   const api = `http://localhost:${BACKEND_PORT}`;
   let backend = null;
   if (!(await waitFor(api + "/health", 1))) {
@@ -325,7 +332,8 @@ async function runChat() {
       die(`Backend did not start. Check ${path.join(HOME_DIR, "backend.log")}`);
     }
   }
-  const code = await require("./chat.js").start({ api, args });
+  const client = agent ? require("./agent.js") : require("./chat.js");
+  const code = await client.start({ api, args });
   if (backend) killTree(backend);
   if (ollamaChild) killTree(ollamaChild);
   process.exit(code || 0);
@@ -371,14 +379,16 @@ async function chooseMode() {
 
 // ---------- main ----------
 (async () => {
-  const oneShot =
-    cmd === "chat" && (args.includes("-p") || args.includes("--print"));
+  const oneShot = ["chat", "agent"].includes(cmd) &&
+    (args.includes("-p") || args.includes("--print"));
   if (!oneShot && cmd !== "update") {
     require("./banner.js").printBanner({
       version: VERSION,
       mode:
         cmd === "chat"
           ? "terminal chat"
+          : cmd === "agent"
+            ? "terminal agent"
           : cmd === "setup"
             ? "setup"
             : cmd
@@ -388,9 +398,9 @@ async function chooseMode() {
   }
   let mode = cmd === "web" || cmd === "start" ? "browser" : cmd;
   if (!mode) mode = args.includes("--no-open") ? "browser" : await chooseMode();
-  setupApp({ skipBuild: mode === "chat" });
+  setupApp({ skipBuild: mode === "chat" || mode === "agent" });
   await ensureOllama();
-  if (mode === "chat") return runChat();
+  if (mode === "chat" || mode === "agent") return runChat({ agent: mode === "agent" });
   if (mode === "setup") {
     ok(
       "Setup complete. Start FRIDAY with:  friday browser   (or terminal chat:  friday chat)",
