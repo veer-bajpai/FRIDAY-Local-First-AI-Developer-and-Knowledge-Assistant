@@ -1,8 +1,11 @@
 import asyncio
+import sys
 from pathlib import Path
 
 import pytest
 
+from friday_agent.engine import create_session, rewind
+from friday_agent.hooks import Hooks
 from friday_agent.permissions import Permissions
 from friday_agent.tools import Context, ToolError, build_tools
 
@@ -48,3 +51,36 @@ def test_readonly_registry_excludes_write_tools():
     names = set(build_tools(read_only=True))
     assert "bash" not in names and "write_file" not in names and "task" not in names
     assert "read_file" in names and "grep" in names
+
+def test_network_commands_require_approval_by_default(tmp_path: Path):
+    bash = build_tools()["bash"]
+    perms = Permissions(tmp_path.resolve(), settings={"network": "ask"})
+    assert perms.check(bash, {"command": "curl https://example.com"})[0] == "ask"
+    denied = Permissions(tmp_path.resolve(), settings={"network": "deny"})
+    assert denied.check(bash, {"command": "curl https://example.com"})[0] == "deny"
+
+def test_pre_tool_hook_blocks_and_rewind_restores_turn(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("friday_agent.config.HOME", tmp_path / "home")
+    monkeypatch.setattr("friday_agent.permissions.HOME", tmp_path / "home")
+    hook = Hooks(
+        {"PreToolUse": [{
+            "matcher": "write_file",
+            "command": f'"{sys.executable}" -c "import sys; sys.exit(7)"',
+        }]},
+        tmp_path,
+    )
+    allowed, message = hook.run("PreToolUse", "write_file", {"path": "new.txt"})
+    assert not allowed
+    assert message
+
+    session = create_session(tmp_path)
+    session.context.begin_turn(len(session.messages), "create new file")
+    session.messages.append({"role": "user", "content": "create new file"})
+    run(build_tools()["write_file"].run(
+        {"path": "new.txt", "content": "created"}, session.context
+    ))
+    session.messages.append({"role": "assistant", "content": "done"})
+
+    assert rewind(session) == ["create new file"]
+    assert not (tmp_path / "new.txt").exists()
+    assert len(session.messages) == 1

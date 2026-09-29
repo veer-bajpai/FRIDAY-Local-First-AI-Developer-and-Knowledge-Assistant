@@ -8,7 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from .config import DEFAULT_MODEL, MAX_STEPS, MODES, NUM_CTX
+from .config import DEFAULT_MODEL, MAX_STEPS, MODES, NUM_CTX, load_project_memory, load_settings
+from .hooks import Hooks
 from .llm import LLMError, chat_stream
 from .permissions import Permissions
 from .tools import Context, ToolError, build_tools
@@ -25,6 +26,7 @@ class AgentSession:
     context: Context
     messages: list[dict[str, Any]]
     read_only: bool = False
+    hooks: Hooks = field(default_factory=Hooks)
     busy: bool = False
     pending_approvals: dict[str, asyncio.Future[str]] = field(default_factory=dict)
 
@@ -43,6 +45,7 @@ def create_session(
     workspace = root.resolve()
     selected_mode = mode if mode in MODES else "default"
     context = Context(root=workspace)
+    settings = load_settings(workspace)
     selected_model = (model or DEFAULT_MODEL).strip()
     if not selected_model or len(selected_model) > 120:
         raise ValueError("Model name must contain between 1 and 120 characters.")
@@ -62,15 +65,17 @@ def create_session(
         id=uuid.uuid4().hex,
         root=workspace,
         model=selected_model,
-        permissions=Permissions(workspace, selected_mode),
+        permissions=Permissions(workspace, selected_mode, settings),
         context=context,
         messages=[
             {
                 "role": "system",
-                "content": f"{SYSTEM_PROMPT}\nWorkspace root: {workspace}",
+                "content": (f"{SYSTEM_PROMPT}\nWorkspace root: {workspace}\n"
+                            f"\n# Project rules (FRIDAY.md)\n{load_project_memory(workspace)}"),
             }
         ],
         read_only=read_only,
+        hooks=Hooks(settings.get("hooks", {}), workspace),
     )
 
 
@@ -90,6 +95,11 @@ def undo(session: AgentSession) -> str:
     if not session.context.checkpoints:
         raise ValueError("There are no file changes to undo.")
     path, previous = session.context.checkpoints.pop()
+    checkpoint = (path, previous)
+    for turn in reversed(session.context.turns):
+        if checkpoint in turn["files"]:
+            turn["files"].remove(checkpoint)
+            break
     if previous is None:
         path.unlink(missing_ok=True)
         session.context.read_files.discard(path)
@@ -97,6 +107,32 @@ def undo(session: AgentSession) -> str:
     path.write_text(previous, encoding="utf-8")
     session.context.read_files.add(path)
     return f"Restored {session.context.rel(path)}"
+
+
+def rewind(session: AgentSession, count: int = 1) -> list[str]:
+    if session.busy:
+        raise RuntimeError("Wait for the current agent turn to finish before rewinding.")
+    if count < 1:
+        raise ValueError("Rewind count must be at least 1.")
+    undone = []
+    for _ in range(min(count, len(session.context.turns))):
+        turn = session.context.turns.pop()
+        for path, previous in reversed(turn["files"]):
+            if previous is None:
+                path.unlink(missing_ok=True)
+                session.context.read_files.discard(path)
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(previous, encoding="utf-8")
+                session.context.read_files.add(path)
+            try:
+                session.context.checkpoints.remove((path, previous))
+            except ValueError:
+                pass
+        undone.append(turn)
+    if undone:
+        session.messages = session.messages[:undone[-1]["msg_index"]]
+    return [turn["label"] for turn in undone]
 
 
 async def run_turn(
@@ -112,6 +148,7 @@ async def run_turn(
 
     if not reserved:
         session.busy = True
+    session.context.begin_turn(len(session.messages), prompt)
     tools = build_tools(read_only=session.read_only)
     schemas = [tool.schema() for tool in tools.values()]
     session.messages.append({"role": "user", "content": prompt})
@@ -201,12 +238,23 @@ async def run_turn(
                 if decision == "deny":
                     result = f"Permission denied: {reason or 'the user declined this action.'}"
                 else:
+                    hook_ok, hook_reason = session.hooks.run("PreToolUse", name, arguments)
+                    if not hook_ok:
+                        result = f"Blocked by PreToolUse hook: {hook_reason}"
+                        session.messages.append({"role": "tool", "tool_name": name, "content": result})
+                        yield {
+                            "type": "tool_result", "id": call_id, "tool": name,
+                            "result": result, "mode": session.mode,
+                            "undo_count": len(session.context.checkpoints),
+                        }
+                        continue
                     if name == "exit_plan_mode" and session.mode == "plan":
                         session.permissions.mode = "default"
                     try:
                         result = await tool.run(arguments, session.context)
                     except Exception as exc:
                         result = f"Tool error: {exc}"
+                    session.hooks.run("PostToolUse", name, arguments, result)
 
                 session.messages.append({"role": "tool", "tool_name": name, "content": result})
                 yield {

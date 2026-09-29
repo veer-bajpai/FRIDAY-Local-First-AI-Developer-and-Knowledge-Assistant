@@ -5,7 +5,7 @@ import json
 import re
 from pathlib import Path
 
-from .config import HOME, MODES
+from .config import HOME, MODES, load_settings
 from .tools import Tool
 
 # Read-only shell commands that never need approval (and only when there is no chaining/redirection).
@@ -29,6 +29,10 @@ DANGEROUS = [
 ]
 
 EDIT_TOOLS = {"edit_file", "write_file"}
+NETWORK_COMMAND = re.compile(
+    r"\b(curl|wget|ssh|gh|pip3?\s+install|npm\s+(i|install)|git\s+(push|pull|fetch|clone))\b",
+    re.I,
+)
 
 def bash_prefix(cmd: str) -> str:
     """'git commit -m x' -> 'git commit'; 'pytest -q' -> 'pytest'. Used for 'always allow' rules."""
@@ -43,11 +47,16 @@ def rule_for(tool: Tool, args: dict) -> str:
     return f"bash:{bash_prefix(args.get('command', ''))}" if tool.name == "bash" else tool.name
 
 class Permissions:
-    def __init__(self, root: Path, mode: str = "default"):
+    def __init__(self, root: Path, mode: str = "default", settings: dict | None = None):
         self.root = root
         self.mode = mode if mode in MODES else "default"
+        self.settings = settings or load_settings(root)
+        self.network = self.settings.get("network", "ask")
         self.allow: set[str] = set()
         self.deny: set[str] = set()
+        configured = self.settings.get("permissions", {})
+        self.allow |= set(configured.get("allow", []))
+        self.deny |= set(configured.get("deny", []))
         for f in (HOME / "settings.json", root / ".friday" / "settings.json"):
             try:
                 data = json.loads(f.read_text())
@@ -78,6 +87,13 @@ class Permissions:
                 return "allow", ""
             return "deny", ("Plan mode is read-only. Research with read tools, then call exit_plan_mode "
                             "with your plan for the user to approve.")
+
+        command = args.get("command", "") if tool.name == "bash" else ""
+        is_network = bool(NETWORK_COMMAND.search(command)) or tool.name == "web_fetch" or tool.name.startswith("mcp__")
+        if is_network and self.network == "deny":
+            return "deny", "Network access is disabled by the project policy."
+        if is_network and self.network != "allow":
+            return "ask", "Network access requires approval."
 
         if tool.name == "exit_plan_mode":
             return "allow", ""

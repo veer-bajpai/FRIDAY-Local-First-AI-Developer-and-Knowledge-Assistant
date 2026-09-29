@@ -28,6 +28,16 @@ class Context:
     todos: list = field(default_factory=list)
     checkpoints: list = field(default_factory=list)  # (Path, previous_text | None) for /undo
     subagent_runner: Any = None
+    turns: list = field(default_factory=list)
+
+    def begin_turn(self, msg_index: int, label: str) -> None:
+        self.turns.append({"msg_index": msg_index, "label": label[:60], "files": []})
+
+    def record_checkpoint(self, path: Path, previous: str | None) -> None:
+        checkpoint = (path, previous)
+        self.checkpoints.append(checkpoint)
+        if self.turns:
+            self.turns[-1]["files"].append(checkpoint)
 
     def resolve(self, p: str) -> Path:
         path = Path(p) if os.path.isabs(p) else self.root / p
@@ -104,7 +114,7 @@ async def write_file(a: dict, ctx: Context) -> str:
     old = p.read_text(errors="replace") if existed else None
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(a["content"], encoding="utf-8")
-    ctx.checkpoints.append((p, old))
+    ctx.record_checkpoint(p, old)
     ctx.read_files.add(p)
     return f"{'Overwrote' if existed else 'Created'} {ctx.rel(p)} ({len(a['content'].splitlines())} lines)"
 
@@ -138,7 +148,7 @@ async def edit_file(a: dict, ctx: Context) -> str:
         raise ToolError(f"Read {a['path']} with read_file before editing it.")
     p, old, new = _edit_apply(a, ctx)
     p.write_text(new, encoding="utf-8")
-    ctx.checkpoints.append((p, old))
+    ctx.record_checkpoint(p, old)
     d = _diff(old, new, ctx.rel(p))
     added = sum(1 for l in d.splitlines() if l.startswith("+") and not l.startswith("+++"))
     removed = sum(1 for l in d.splitlines() if l.startswith("-") and not l.startswith("---"))

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 
 def _host(value: str) -> str:
@@ -11,6 +12,47 @@ def _host(value: str) -> str:
     return value.replace("0.0.0.0", "127.0.0.1").rstrip("/")
 
 HOME = Path.home() / ".friday"
+DEFAULT_SETTINGS = {
+    "trusted_dirs": [],
+    "network": "ask",
+    "permissions": {"allow": [], "deny": []},
+    "hooks": {},
+    "theme": "midnight",
+}
+
+def _merge_settings(target: dict, source: dict) -> dict:
+    for key, value in source.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            _merge_settings(target[key], value)
+        else:
+            target[key] = value
+    return target
+
+def load_settings(root: Path) -> dict:
+    settings = json.loads(json.dumps(DEFAULT_SETTINGS))
+    for file in (HOME / "settings.json", root / ".friday" / "settings.json"):
+        try:
+            _merge_settings(settings, json.loads(file.read_text(encoding="utf-8")))
+        except FileNotFoundError:
+            continue
+        except (OSError, json.JSONDecodeError):
+            continue
+    return settings
+
+def load_project_memory(root: Path) -> str:
+    try:
+        return (root / "FRIDAY.md").read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+
+def load_custom_commands(root: Path) -> dict[str, str]:
+    commands: dict[str, str] = {}
+    for directory in (HOME / "commands", root / ".friday" / "commands"):
+        if directory.is_dir():
+            commands.update({file.stem: file.read_text(encoding="utf-8")
+                             for file in directory.glob("*.md")})
+    return commands
+
 OLLAMA_HOST = _host(
     os.getenv("OLLAMA_HOST", os.getenv("OLLAMA_URL", "127.0.0.1:11434"))
 )
