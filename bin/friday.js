@@ -70,7 +70,15 @@ if (args.includes("-v") || args.includes("--version")) {
   process.exit(0);
 }
 
-const KNOWN_COMMANDS = ["browser", "web", "start", "chat", "agent", "setup", "update"];
+const KNOWN_COMMANDS = [
+  "browser",
+  "web",
+  "start",
+  "chat",
+  "agent",
+  "setup",
+  "update",
+];
 if (cmd && !KNOWN_COMMANDS.includes(cmd)) {
   die(
     `Unknown command "${cmd}". Try: friday browser | friday chat | friday --help`,
@@ -379,7 +387,8 @@ async function chooseMode() {
 
 // ---------- main ----------
 (async () => {
-  const oneShot = ["chat", "agent"].includes(cmd) &&
+  const oneShot =
+    ["chat", "agent"].includes(cmd) &&
     (args.includes("-p") || args.includes("--print"));
   if (!oneShot && cmd !== "update") {
     require("./banner.js").printBanner({
@@ -389,18 +398,19 @@ async function chooseMode() {
           ? "terminal chat"
           : cmd === "agent"
             ? "terminal agent"
-          : cmd === "setup"
-            ? "setup"
-            : cmd
-              ? "browser"
-              : "",
+            : cmd === "setup"
+              ? "setup"
+              : cmd
+                ? "browser"
+                : "",
     });
   }
   let mode = cmd === "web" || cmd === "start" ? "browser" : cmd;
   if (!mode) mode = args.includes("--no-open") ? "browser" : await chooseMode();
   setupApp({ skipBuild: mode === "chat" || mode === "agent" });
   await ensureOllama();
-  if (mode === "chat" || mode === "agent") return runChat({ agent: mode === "agent" });
+  if (mode === "chat" || mode === "agent")
+    return runChat({ agent: mode === "agent" });
   if (mode === "setup") {
     ok(
       "Setup complete. Start FRIDAY with:  friday browser   (or terminal chat:  friday chat)",

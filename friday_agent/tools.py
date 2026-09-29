@@ -17,9 +17,15 @@ from .config import API_URL
 
 IGNORE_DIRS = {".git", "node_modules", ".next", "__pycache__", ".venv", "venv", "dist", "build", ".friday", "data"}
 MAX_OUT = 20_000
+EXTERNAL_TOOLS: dict[str, Tool] = {}
 
 class ToolError(Exception):
     """Raised for expected failures; the message is shown to the model so it can recover."""
+
+
+def register_external_tools(tools: dict[str, "Tool"]) -> None:
+    EXTERNAL_TOOLS.clear()
+    EXTERNAL_TOOLS.update(tools)
 
 @dataclass
 class Context:
@@ -29,6 +35,7 @@ class Context:
     checkpoints: list = field(default_factory=list)  # (Path, previous_text | None) for /undo
     subagent_runner: Any = None
     subagent_parallel_runner: Any = None
+    session_message_runner: Any = None
     turns: list = field(default_factory=list)
 
     def begin_turn(self, msg_index: int, label: str) -> None:
@@ -61,6 +68,7 @@ class Tool:
     run: Callable[[dict, Context], Awaitable[str]]
     read_only: bool = False
     preview: Callable[[dict, Context], str] | None = None
+    network: bool = False
 
     def schema(self) -> dict:
         return {"type": "function", "function": {"name": self.name, "description": self.description,
@@ -276,6 +284,11 @@ async def task(a: dict, ctx: Context) -> str:
         raise ToolError("Subagents are not available here.")
     return await ctx.subagent_runner(a["prompt"])
 
+async def send_agent_message(a: dict, ctx: Context) -> str:
+    if ctx.session_message_runner is None:
+        raise ToolError("Cross-session messaging is unavailable.")
+    return await ctx.session_message_runner(a["target"], a["text"])
+
 async def spawn_subagent(a: dict, ctx: Context) -> str:
     if ctx.subagent_parallel_runner is None:
         raise ToolError("Parallel subagents are not available here.")
@@ -318,7 +331,9 @@ def build_tools(read_only: bool = False) -> dict[str, Tool]:
                      "Non-interactive only.",
              _obj({"command": _S, "timeout": {"type": "integer", "description": "seconds, max 600"}},
                   ["command"]), bash),
-        Tool("web_fetch", "Fetch a URL and return its text.", _obj({"url": _S}, ["url"]), web_fetch),
+        Tool("web_fetch", "Fetch a URL and return its text.", _obj({"url": _S}, ["url"]), web_fetch, True),
+           Tool("SendMessage", "Send a message to another active Friday agent session.",
+               _obj({"target": _S, "text": _S}, ["target", "text"]), send_agent_message),
         Tool("todo_write", "Create/update the task list for multi-step work (3+ steps). Send the FULL list.",
              _obj({"todos": {"type": "array", "items": _obj(
                  {"content": _S, "status": {"type": "string",
@@ -334,5 +349,10 @@ def build_tools(read_only: bool = False) -> dict[str, Tool]:
              lambda a, ctx: a.get("plan", "")),
     ]
     if read_only:
-        tools = [t for t in tools if t.read_only and t.name not in {"task", "spawn_subagent"}]
+        tools = [t for t in tools if t.read_only and t.name not in {"task", "spawn_subagent", "SendMessage"}]
+    from .git_ops import git_tools
+    tools.extend(git_tools())
+    tools.extend(EXTERNAL_TOOLS.values())
+    if read_only:
+        tools = [t for t in tools if t.read_only]
     return {t.name: t for t in tools}

@@ -1,0 +1,6 @@
+# Optional MCP servers, local speech input, and the commit lint hook.
+mcp>=1.0,<2
+numpy>=1.26,<3
+sounddevice>=0.5,<1
+faster-whisper>=1.1,<2
+ruff>=0.9,<1

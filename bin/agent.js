@@ -146,6 +146,13 @@ async function start({ api, args = [] }) {
   /rewind [n]            restore the last n prompts and file changes
   /context              show session context and token usage
   /compact              summarize and compact session history
+  /batch <task>          split work into isolated Git worktrees
+  /code-review [PR]     review working diff or a pull request
+  /security-review [PR] security-review working diff or a pull request
+  /agents               list other active Friday agent sessions
+  /msg <id> <text>      message another active agent session
+  /voice                record and transcribe an 8-second prompt
+  /insights             open the local usage report
   /theme [name]         set midnight, ember, or forest
   /clear                clear the terminal
   /exit                 close this agent session`);
@@ -205,6 +212,62 @@ async function start({ api, args = [] }) {
           sendJson("POST", {}),
         );
         console.log(`History compacted. ${result.messages} messages remain.`);
+        return;
+      }
+      case "batch":
+        if (!arg) throw new Error("Usage: /batch <independent coding task>");
+        return runTurn(
+          `Split this into independent subtasks that touch different files. Use the batch_worktrees tool to create one isolated worktree per subtask, then report each branch and worktree path. Task: ${arg}`,
+        );
+      case "code-review":
+      case "security-review": {
+        const target = arg ? `pull request ${arg}` : "the current working diff";
+        const reviewType =
+          name === "security-review"
+            ? "Review for security issues including injection, authorization, secrets, path traversal, and unsafe subprocess use."
+            : "Review for correctness, edge cases, missing tests, and regressions.";
+        return runTurn(
+          `${reviewType} Use git_review_diff${arg ? ` with PR number ${arg}` : " for the working diff"}. Prioritize actionable findings with file and line references. Review ${target}.`,
+        );
+      }
+      case "agents": {
+        const agents = await json("/api/agent/sessions");
+        const others = agents.filter(
+          (agent) => agent.id !== session.id.slice(0, 8),
+        );
+        console.log(
+          others.length
+            ? others
+                .map(
+                  (agent) =>
+                    `${agent.id}  ${agent.workspace}  ${agent.busy ? "busy" : agent.mode}`,
+                )
+                .join("\n")
+            : "No other agent sessions.",
+        );
+        return;
+      }
+      case "msg": {
+        const [target, ...messageParts] = arg.split(/\s+/);
+        const text = messageParts.join(" ").trim();
+        if (!target || !text)
+          throw new Error("Usage: /msg <session-id> <message>");
+        return runTurn(
+          `Use the SendMessage tool to send this exact message to Friday session ${target}: ${JSON.stringify(text)}`,
+        );
+      }
+      case "voice": {
+        const result = await json("/api/agent/voice", sendJson("POST", {}));
+        if (!result.text) {
+          console.log("No speech detected.");
+          return;
+        }
+        console.log(`${color(theme.muted, "heard:")} ${result.text}`);
+        return runTurn(result.text);
+      }
+      case "insights": {
+        const result = await json("/api/agent/insights");
+        console.log(`Insights report opened: ${result.path}`);
         return;
       }
       case "theme": {

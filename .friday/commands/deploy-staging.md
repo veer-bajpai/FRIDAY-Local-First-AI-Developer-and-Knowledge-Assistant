@@ -1,0 +1,1 @@
+Run the test suite first. If it passes, build the project. Deploy only when a staging deployment script is present and its target is configured; otherwise report that staging deployment is not configured. Extra instructions: $ARGUMENTS

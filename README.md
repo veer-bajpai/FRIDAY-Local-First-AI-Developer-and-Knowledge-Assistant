@@ -107,10 +107,12 @@ Useful commands:
 | `friday --no-open`          | Start services without opening a browser                     |
 | `friday chat`               | Interactive terminal chat using the shared backend history   |
 | `friday chat -p "question"` | Ask one question and exit                                    |
+| `friday agent`              | Run the local coding agent with permission prompts           |
+| `friday agent -p "task"`    | Run one coding-agent task and exit                           |
 | `friday setup`              | Install/cache dependencies, build, and prepare Ollama models |
 | `friday update`             | Fast-forward the CLI checkout and invalidate setup stamps    |
 
-Terminal chat supports `/new`, `/history`, `/resume <n|id>`, `/docs`, `/status`, `/sources on|off`, `/k <1-20>`, `/clear`, `/help`, and `/exit`. Use `friday agent` for the local coding agent with `/plan`, `/rewind`, `/context`, `/compact`, and `/theme`. The terminal HUD includes a time-based greeting, battery and git telemetry, and success/error prompt status. Banner options: `FRIDAY_THEME=midnight|ember|forest` (midnight by default), `FRIDAY_NO_BANNER=1`; `NO_COLOR` and non-TTY output also suppress the banner.
+Terminal chat supports `/new`, `/history`, `/resume <n|id>`, `/docs`, `/status`, `/sources on|off`, `/k <1-20>`, `/clear`, `/help`, and `/exit`. `friday agent` adds `/plan`, `/rewind`, `/context`, `/compact`, `/batch`, `/code-review`, `/security-review`, `/agents`, `/msg`, `/voice`, `/insights`, and `/theme`. Optional MCP and voice dependencies can be installed with `pip install -r backend/requirements-agent-optional.txt`. Network actions ask before running. Dark themes: `FRIDAY_THEME=midnight|ember|forest` (midnight by default); `FRIDAY_NO_BANNER=1` hides the banner.
 
 ### Image uploads
 

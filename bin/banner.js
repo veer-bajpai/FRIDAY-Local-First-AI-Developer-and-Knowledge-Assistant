@@ -120,7 +120,8 @@ function printBanner({ version = "", mode = "" } = {}) {
     return;
 
   const theme =
-    THEMES[(process.env.FRIDAY_THEME || "midnight").toLowerCase()] || THEMES.midnight;
+    THEMES[(process.env.FRIDAY_THEME || "midnight").toLowerCase()] ||
+    THEMES.midnight;
   const cols = process.stdout.columns || 80;
   const tc = truecolor();
   const letter = (i) => {

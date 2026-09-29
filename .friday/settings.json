@@ -1,0 +1,18 @@
+{
+  "theme": "midnight",
+  "network": "ask",
+  "trusted_dirs": [],
+  "permissions": {
+    "allow": [],
+    "deny": []
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "git_commit",
+        "command": "python .friday/hooks/pre_commit_lint.py",
+        "timeout": 120
+      }
+    ]
+  }
+}

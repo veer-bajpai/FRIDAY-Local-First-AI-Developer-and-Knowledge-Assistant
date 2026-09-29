@@ -31,6 +31,7 @@ class AgentSession:
     busy: bool = False
     pending_approvals: dict[str, asyncio.Future[str]] = field(default_factory=dict)
     usage: dict[str, int] = field(default_factory=lambda: {"in": 0, "out": 0})
+    inbox: list[dict[str, str]] = field(default_factory=list)
 
     @property
     def mode(self) -> str:
@@ -193,6 +194,8 @@ async def compact_session(session: AgentSession) -> str:
         if not summary:
             raise LLMError("The model returned an empty session summary.")
         session.messages = [session.messages[0], {"role": "user", "content": "Session summary:\n" + summary}]
+        for turn in session.context.turns:
+            turn["msg_index"] = 1
         return summary
     finally:
         session.busy = False

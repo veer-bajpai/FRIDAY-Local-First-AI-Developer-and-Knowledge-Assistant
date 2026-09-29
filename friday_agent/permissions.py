@@ -79,19 +79,22 @@ class Permissions:
             return "deny", f"Blocked by a deny rule ({rule})."
 
         safe_cmd = tool.name == "bash" and SAFE_BASH.match(cmd.strip()) and not CHAINING.search(cmd)
+        command = args.get("command", "") if tool.name == "bash" else ""
+        is_network = (tool.network or bool(NETWORK_COMMAND.search(command))
+                      or tool.name == "web_fetch" or tool.name.startswith("mcp__"))
+        if is_network and self.network == "deny":
+            return "deny", "Network access is disabled by the project policy."
 
         if self.mode == "plan":
             if tool.name == "exit_plan_mode":
                 return "ask", ""
             if tool.read_only or safe_cmd:
+                if is_network and self.network != "allow":
+                    return "ask", "Network access requires approval."
                 return "allow", ""
             return "deny", ("Plan mode is read-only. Research with read tools, then call exit_plan_mode "
                             "with your plan for the user to approve.")
 
-        command = args.get("command", "") if tool.name == "bash" else ""
-        is_network = bool(NETWORK_COMMAND.search(command)) or tool.name == "web_fetch" or tool.name.startswith("mcp__")
-        if is_network and self.network == "deny":
-            return "deny", "Network access is disabled by the project policy."
         if is_network and self.network != "allow":
             return "ask", "Network access requires approval."
 

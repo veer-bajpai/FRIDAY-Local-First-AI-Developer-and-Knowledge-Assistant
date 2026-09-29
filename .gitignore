@@ -51,3 +51,13 @@ next-env.d.ts
 
 backend/data/
 .friday/
+!.friday/
+.friday/*
+!.friday/settings.json
+!.friday/mcp.json
+!.friday/commands/
+.friday/commands/*
+!.friday/commands/deploy-staging.md
+!.friday/hooks/
+.friday/hooks/*
+!.friday/hooks/pre_commit_lint.py
