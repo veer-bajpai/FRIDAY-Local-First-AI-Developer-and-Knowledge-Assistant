@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +30,7 @@ class AgentSession:
     hooks: Hooks = field(default_factory=Hooks)
     busy: bool = False
     pending_approvals: dict[str, asyncio.Future[str]] = field(default_factory=dict)
+    usage: dict[str, int] = field(default_factory=lambda: {"in": 0, "out": 0})
 
     @property
     def mode(self) -> str:
@@ -60,7 +62,14 @@ def create_session(
                 raise ToolError(event["message"])
         return "".join(output) or "The read-only subagent returned no text."
 
+    async def run_subagents(prompts: list[str]) -> str:
+        results = await asyncio.gather(*(run_subagent(prompt) for prompt in prompts))
+        return "\n\n---\n\n".join(
+            f"Subtask {index}:\n{result}" for index, result in enumerate(results, 1)
+        )
+
     context.subagent_runner = run_subagent
+    context.subagent_parallel_runner = run_subagents
     return AgentSession(
         id=uuid.uuid4().hex,
         root=workspace,
@@ -135,6 +144,60 @@ def rewind(session: AgentSession, count: int = 1) -> list[str]:
     return [turn["label"] for turn in undone]
 
 
+def context_report(session: AgentSession) -> dict[str, int]:
+    estimate = len(json.dumps(session.messages, default=str)) // 4
+    return {
+        "messages": len(session.messages),
+        "estimated_tokens": estimate,
+        "input_tokens": session.usage["in"],
+        "output_tokens": session.usage["out"],
+        "undo_count": len(session.context.checkpoints),
+    }
+
+
+def _log_tool_call(session: AgentSession, name: str, result: str) -> None:
+    path = session.root / ".friday" / "usage.jsonl"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as log:
+            log.write(json.dumps({
+                "ts": time.time(),
+                "tool": name,
+                "ok": not result.startswith(("Tool error:", "Permission denied:", "Blocked by", "User declined")),
+                **session.usage,
+            }) + "\n")
+    except OSError:
+        pass
+
+
+async def compact_session(session: AgentSession) -> str:
+    if session.busy:
+        raise RuntimeError("Wait for the current agent turn to finish before compacting.")
+    session.busy = True
+    transcript = json.dumps(session.messages[1:], ensure_ascii=False, default=str)[:150_000]
+    compact_messages = [
+        session.messages[0],
+        {"role": "user", "content": "Summarize this session for continuation: goals, decisions, "
+         "files changed, and open tasks. Preserve actionable details.\n\n" + transcript},
+    ]
+    summary_parts = []
+    try:
+        async for chunk in chat_stream(session.model, compact_messages, options={"num_ctx": NUM_CTX}):
+            message = chunk.get("message") or {}
+            if message.get("content"):
+                summary_parts.append(message["content"])
+            if chunk.get("done"):
+                session.usage["in"] += int(chunk.get("prompt_eval_count", 0) or 0)
+                session.usage["out"] += int(chunk.get("eval_count", 0) or 0)
+        summary = "".join(summary_parts).strip()
+        if not summary:
+            raise LLMError("The model returned an empty session summary.")
+        session.messages = [session.messages[0], {"role": "user", "content": "Session summary:\n" + summary}]
+        return summary
+    finally:
+        session.busy = False
+
+
 async def run_turn(
     session: AgentSession, prompt: str, *, reserved: bool = False
 ) -> AsyncIterator[dict[str, Any]]:
@@ -171,6 +234,8 @@ async def run_turn(
                     yield {"type": "token", "content": content}
                 tool_calls.extend(message.get("tool_calls") or [])
                 if chunk.get("done"):
+                    session.usage["in"] += int(chunk.get("prompt_eval_count", 0) or 0)
+                    session.usage["out"] += int(chunk.get("eval_count", 0) or 0)
                     break
 
             assistant_message: dict[str, Any] = {
@@ -256,6 +321,7 @@ async def run_turn(
                         result = f"Tool error: {exc}"
                     session.hooks.run("PostToolUse", name, arguments, result)
 
+                _log_tool_call(session, name, result)
                 session.messages.append({"role": "tool", "tool_name": name, "content": result})
                 yield {
                     "type": "tool_result",

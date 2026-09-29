@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from friday_agent.engine import create_session, rewind
+from friday_agent import engine
+from friday_agent.engine import context_report, create_session, rewind
 from friday_agent.hooks import Hooks
 from friday_agent.permissions import Permissions
 from friday_agent.tools import Context, ToolError, build_tools
@@ -84,3 +85,36 @@ def test_pre_tool_hook_blocks_and_rewind_restores_turn(tmp_path: Path, monkeypat
     assert rewind(session) == ["create new file"]
     assert not (tmp_path / "new.txt").exists()
     assert len(session.messages) == 1
+
+def test_context_compaction_tracks_usage(tmp_path: Path, monkeypatch):
+    async def fake_chat_stream(model, messages, tools=None, options=None):
+        yield {
+            "message": {"content": "Keep the implementation and tests in sync."},
+            "done": True,
+            "prompt_eval_count": 11,
+            "eval_count": 7,
+        }
+
+    monkeypatch.setattr("friday_agent.config.HOME", tmp_path / "home")
+    monkeypatch.setattr("friday_agent.permissions.HOME", tmp_path / "home")
+    monkeypatch.setattr(engine, "chat_stream", fake_chat_stream)
+    session = create_session(tmp_path)
+    session.messages.append({"role": "user", "content": "older context"})
+
+    assert run(engine.compact_session(session)) == "Keep the implementation and tests in sync."
+    report = context_report(session)
+    assert report["messages"] == 2
+    assert report["input_tokens"] == 11
+    assert report["output_tokens"] == 7
+
+def test_parallel_subagent_tool_is_bounded_and_read_only():
+    context = Context(root=Path.cwd())
+
+    async def runner(tasks):
+        return ",".join(tasks)
+
+    context.subagent_parallel_runner = runner
+    result = run(build_tools()["spawn_subagent"].run({"tasks": ["inspect A", "inspect B"]}, context))
+    assert result == "inspect A,inspect B"
+    with pytest.raises(ToolError):
+        run(build_tools()["spawn_subagent"].run({"tasks": ["a"] * 5}, context))

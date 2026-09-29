@@ -13,7 +13,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from friday_agent.config import DEFAULT_MODEL, MAX_STEPS, MODES, NUM_CTX
-from friday_agent.engine import AgentSession, create_session, run_turn, undo
+from friday_agent.engine import (
+    AgentSession, compact_session, context_report, create_session, rewind,
+    run_turn, undo,
+)
 from friday_agent.llm import list_models
 
 router = APIRouter()
@@ -66,6 +69,10 @@ class ApprovalRequest(BaseModel):
     decision: Literal["allow", "deny", "always"]
 
 
+class RewindRequest(BaseModel):
+    count: int = Field(default=1, ge=1, le=100)
+
+
 def _session_or_404(session_id: str) -> AgentSession:
     session = SESSIONS.get(session_id)
     if session is None:
@@ -84,6 +91,7 @@ def _session_payload(session: AgentSession) -> dict:
         "undo_count": len(session.context.checkpoints),
         "max_steps": MAX_STEPS,
         "num_ctx": NUM_CTX,
+        "usage": session.usage,
     }
 
 
@@ -176,6 +184,35 @@ async def undo_agent_change(session_id: str) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"message": message, "undo_count": len(session.context.checkpoints)}
+
+
+@router.post("/api/agent/sessions/{session_id}/rewind", dependencies=[Depends(require_local_agent_request)])
+async def rewind_agent_turn(session_id: str, body: RewindRequest) -> dict:
+    session = _session_or_404(session_id)
+    try:
+        labels = rewind(session, body.count)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"rewound": labels, "undo_count": len(session.context.checkpoints)}
+
+
+@router.get("/api/agent/sessions/{session_id}/context", dependencies=[Depends(require_local_agent_request)])
+async def agent_context(session_id: str) -> dict:
+    return context_report(_session_or_404(session_id))
+
+
+@router.post("/api/agent/sessions/{session_id}/compact", dependencies=[Depends(require_local_agent_request)])
+async def compact_agent_session(session_id: str) -> dict:
+    session = _session_or_404(session_id)
+    try:
+        summary = await compact_session(session)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not compact session: {exc}") from exc
+    return {"summary": summary, **context_report(session)}
 
 
 @router.delete("/api/agent/sessions/{session_id}", dependencies=[Depends(require_local_agent_request)])

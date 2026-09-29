@@ -28,6 +28,7 @@ class Context:
     todos: list = field(default_factory=list)
     checkpoints: list = field(default_factory=list)  # (Path, previous_text | None) for /undo
     subagent_runner: Any = None
+    subagent_parallel_runner: Any = None
     turns: list = field(default_factory=list)
 
     def begin_turn(self, msg_index: int, label: str) -> None:
@@ -275,6 +276,16 @@ async def task(a: dict, ctx: Context) -> str:
         raise ToolError("Subagents are not available here.")
     return await ctx.subagent_runner(a["prompt"])
 
+async def spawn_subagent(a: dict, ctx: Context) -> str:
+    if ctx.subagent_parallel_runner is None:
+        raise ToolError("Parallel subagents are not available here.")
+    prompts = a.get("tasks", [])
+    if not isinstance(prompts, list) or not prompts or any(not isinstance(p, str) or not p.strip() for p in prompts):
+        raise ToolError("Provide between one and four non-empty subagent tasks.")
+    if len(prompts) > 4:
+        raise ToolError("At most four subagent tasks can run at once.")
+    return await ctx.subagent_parallel_runner(prompts)
+
 # ------------------------------------------------------------------ registry
 def _obj(props: dict, required: list[str]) -> dict:
     return {"type": "object", "properties": props, "required": required}
@@ -316,10 +327,12 @@ def build_tools(read_only: bool = False) -> dict[str, Tool]:
         Tool("task", "Delegate a research question to a read-only subagent with a fresh context. "
                      "Use for broad codebase exploration. Returns its report.",
              _obj({"prompt": _S}, ["prompt"]), task, True),
+           Tool("spawn_subagent", "Run up to four independent read-only research subtasks in parallel.",
+               _obj({"tasks": {"type": "array", "items": _S}}, ["tasks"]), spawn_subagent, True),
         Tool("exit_plan_mode", "In plan mode only: present your finished plan (markdown) for approval.",
              _obj({"plan": _S}, ["plan"]), exit_plan_mode, False,
              lambda a, ctx: a.get("plan", "")),
     ]
     if read_only:
-        tools = [t for t in tools if t.read_only and t.name != "task"]
+        tools = [t for t in tools if t.read_only and t.name not in {"task", "spawn_subagent"}]
     return {t.name: t for t in tools}
