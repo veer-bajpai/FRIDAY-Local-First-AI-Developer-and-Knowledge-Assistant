@@ -9,6 +9,8 @@ const readline = require("readline");
 
 const tty = process.stdout.isTTY;
 const paint = (n, s) => (tty ? `\x1b[${n}m${s}\x1b[0m` : s);
+const paint256 = (n, s) =>
+  tty && !process.env.NO_COLOR ? `\x1b[38;5;${n}m${s}\x1b[0m` : s;
 const dim = (s) => paint(90, s),
   cyan = (s) => paint(36, s),
   green = (s) => paint(32, s);
@@ -36,6 +38,12 @@ const HELP = `
 async function start({ api, args = [] }) {
   const state = { convId: null, k: null, showSources: true, history: [] };
   let controller = null;
+  let lastExitCode = 0;
+  const promptForStatus = (exitCode) => {
+    const core =
+      exitCode === 0 ? paint256(45, "◖ 🌟 ◗") : paint256(196, "⎔ ⚠️ ⎔");
+    return `${paint256(242, "⚙")} ${core} ${paint256(45, "friday")}${paint256(255, "❯")} `;
+  };
 
   const call = async (method, path, body) => {
     const res = await fetch(api + path, {
@@ -227,14 +235,16 @@ async function start({ api, args = [] }) {
   try {
     const s = await call("GET", "/api/status");
     status = `${s.generation_model} · ollama ${s.ollama} · ${s.documents} docs`;
-  } catch {}
+  } catch {
+    lastExitCode = 1;
+  }
   console.log("\n" + dim(status));
   console.log(dim("  /help for commands · Ctrl+C to quit\n"));
 
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: cyan("you › "),
+    prompt: promptForStatus(lastExitCode),
   });
   let pending = "";
   let queue = Promise.resolve();
@@ -268,13 +278,18 @@ async function start({ api, args = [] }) {
           rl.close();
           return;
         }
+        lastExitCode = 0;
       } else if (line.length > 4000) {
         console.log(red("  message too long (max 4000 characters)\n"));
+        lastExitCode = 1;
       } else {
-        await ask(line);
+        lastExitCode = (await ask(line)) ? 0 : 1;
       }
     }
-    if (!inputClosed && !rl.closed) rl.prompt();
+    if (!inputClosed && !rl.closed) {
+      rl.setPrompt(promptForStatus(lastExitCode));
+      rl.prompt();
+    }
   };
 
   const closed = new Promise((resolve) => {
@@ -291,8 +306,12 @@ async function start({ api, args = [] }) {
     queue = queue
       .then(() => processLine(raw))
       .catch((e) => {
+        lastExitCode = 1;
         console.log(red("  error: " + e.message) + "\n");
-        if (!inputClosed && !rl.closed) rl.prompt();
+        if (!inputClosed && !rl.closed) {
+          rl.setPrompt(promptForStatus(lastExitCode));
+          rl.prompt();
+        }
       });
   });
 

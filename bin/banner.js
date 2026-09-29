@@ -1,13 +1,13 @@
 "use strict";
 /* eslint-disable @typescript-eslint/no-require-imports */
 /**
- * Startup banner for FRIDAY: a pixel-art avatar + big block letters.
+ * Startup banner for FRIDAY: pink block letters and status text.
  * Auto-skipped when output isn't a terminal, NO_COLOR is set, or FRIDAY_NO_BANNER=1.
- *   FRIDAY_THEME  = cyan (default) | orange | green | purple   (colour of the letters)
- *   FRIDAY_MASCOT = 0                                          (hide the avatar)
+ *   FRIDAY_THEME  = pink (default) | cyan | orange | green | purple
  */
 const os = require("os");
 const path = require("path");
+const { spawnSync } = require("child_process");
 
 const LOGO = [
   "███████╗██████╗ ██╗██████╗  █████╗ ██╗   ██╗",
@@ -17,44 +17,8 @@ const LOGO = [
   "██║     ██║  ██║██║██████╔╝██║  ██║   ██║   ",
   "╚═╝     ╚═╝  ╚═╝╚═╝╚═════╝ ╚═╝  ╚═╝   ╚═╝   ",
 ];
-const TAGLINE = "Fast Retrieval, Intelligent Dialogue & Autonomous Yield";
-
-// Pixel-art avatar of FRIDAY (woman with an AI headset). Each terminal line shows 2 pixel rows (half-blocks).
-const MASCOT = [
-  ".......OOOOOOOOOO.......",
-  "......OGGGGggGGGGO......",
-  "....OGGHHhHHHHhHHGGO....",
-  "...OGHHHHSSSSSSHHHHGO...",
-  "...OGHHSSSSSSSSSSHHGO...",
-  "...GGGSEESSSSSSEESGGG...",
-  "...GgGSWCSSSSSSCWSGgG...",
-  "...GgGSSSSSssSSSSSGgG...",
-  "...GGGSPPSSSSSSPPSGGG...",
-  "...OGGGGGgSRRSSSSSHHO...",
-  "....OHHSSSSSSSSSSHHO....",
-  ".....OHHSSSSSSSSHHO.....",
-  "......OHHHSSSSHHHO......",
-  "...OJJJJJJSSSSJJJJJJO...",
-  "..OJJJJJJJJJJJJJJJJJJO..",
-  "..OOOOOOOOOOOOOOOOOOOO..",
-];
-const PALETTE = {
-  O: [30, 18, 16], // outline
-  H: [58, 34, 28], // hair
-  h: [120, 74, 54], // hair highlight
-  S: [238, 190, 160], // skin
-  s: [205, 145, 120], // nose shadow
-  E: [25, 15, 12], // lashes / brows
-  W: [255, 255, 255], // eye white
-  C: [0, 190, 230], // iris
-  R: [190, 55, 80], // lips
-  P: [230, 140, 135], // blush
-  G: [38, 48, 68], // headset
-  g: [0, 229, 255], // headset glow
-  J: [45, 55, 80], // jacket
-};
-
 const THEMES = {
+  pink: { from: [228, 112, 158], to: [180, 72, 120], basic: 35 },
   cyan: { from: [0, 229, 255], to: [41, 121, 255], basic: 36 },
   orange: { from: [240, 150, 110], to: [204, 95, 60], basic: 33 },
   green: { from: [105, 240, 174], to: [0, 200, 120], basic: 32 },
@@ -62,6 +26,14 @@ const THEMES = {
 };
 
 const RESET = "\x1b[0m";
+const HUD = {
+  cyan: "\x1b[38;5;45m",
+  orange: "\x1b[38;5;208m",
+  red: "\x1b[38;5;196m",
+  white: "\x1b[38;5;255m",
+  gray: "\x1b[38;5;242m",
+  bold: "\x1b[1m",
+};
 const truecolor = () =>
   /truecolor|24bit/i.test(process.env.COLORTERM || "") ||
   !!process.env.WT_SESSION ||
@@ -69,28 +41,76 @@ const truecolor = () =>
   process.env.TERM_PROGRAM === "iTerm.app";
 
 const lerp = (a, b, t) => Math.round(a + (b - a) * t);
-const to256 = ([r, g, b]) =>
-  16 + 36 * Math.round(r / 51) + 6 * Math.round(g / 51) + Math.round(b / 51);
 
-function mascotLines(tc) {
-  const fg = (c) =>
-    tc ? `\x1b[38;2;${c.join(";")}m` : `\x1b[38;5;${to256(c)}m`;
-  const bg = (c) =>
-    tc ? `\x1b[48;2;${c.join(";")}m` : `\x1b[48;5;${to256(c)}m`;
-  const lines = [];
-  for (let r = 0; r < MASCOT.length; r += 2) {
-    let s = "";
-    for (let c = 0; c < MASCOT[0].length; c++) {
-      const top = PALETTE[MASCOT[r][c]],
-        bot = PALETTE[MASCOT[r + 1][c]];
-      if (!top && !bot) s += " ";
-      else if (top && !bot) s += fg(top) + "▀" + RESET;
-      else if (!top && bot) s += fg(bot) + "▄" + RESET;
-      else s += fg(top) + bg(bot) + "▀" + RESET;
-    }
-    lines.push(s);
+function visibleLength(value) {
+  const plain = value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+  return [...plain].reduce((length, character) => {
+    if (character === "\uFE0F") return length;
+    const codePoint = character.codePointAt(0);
+    const isWideEmoji =
+      (codePoint >= 0x1f300 && codePoint <= 0x1faff) ||
+      (codePoint >= 0x2600 && codePoint <= 0x27bf);
+    return length + (isWideEmoji ? 2 : 1);
+  }, 0);
+}
+
+function boxedLine(value, width) {
+  const padding = " ".repeat(Math.max(0, width - visibleLength(value)));
+  return `${HUD.gray}│${RESET}${value}${padding}${HUD.gray}│${RESET}`;
+}
+
+function batteryInfo() {
+  const run = (command, args) =>
+    spawnSync(command, args, {
+      encoding: "utf8",
+      timeout: 1500,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+
+  if (process.platform === "win32") {
+    const result = run("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "(Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty EstimatedChargeRemaining)",
+    ]);
+    const percentage = Number.parseInt((result.stdout || "").trim(), 10);
+    return Number.isInteger(percentage) ? `${percentage}%` : "N/A";
   }
-  return lines;
+
+  if (process.platform === "darwin") {
+    const result = run("pmset", ["-g", "batt"]);
+    return result.stdout?.match(/\d+%/)?.[0] || "N/A";
+  }
+
+  const devices = run("upower", ["-e"]);
+  const battery = (devices.stdout || "")
+    .split(/\r?\n/)
+    .find((device) => /battery/i.test(device));
+  if (!battery) return "N/A";
+  const result = run("upower", ["-i", battery]);
+  return result.stdout?.match(/percentage:\s*(\S+)/)?.[1] || "N/A";
+}
+
+function gitBranch() {
+  const result = spawnSync("git", ["branch", "--show-current"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    timeout: 1000,
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  const branch = result.status === 0 ? result.stdout.trim() : "";
+  return branch
+    ? ` 🌿 ${HUD.orange}git:(${HUD.white}${branch.slice(0, 20)}${HUD.orange})${RESET}`
+    : "";
+}
+
+function greeting(hour) {
+  if (hour < 12) return "Good morning, Boss.";
+  if (hour < 17) return "Good afternoon, Boss.";
+  return "Good evening, Boss.";
 }
 
 function printBanner({ version = "", mode = "" } = {}) {
@@ -102,10 +122,8 @@ function printBanner({ version = "", mode = "" } = {}) {
     return;
 
   const theme =
-    THEMES[(process.env.FRIDAY_THEME || "cyan").toLowerCase()] || THEMES.cyan;
+    THEMES[(process.env.FRIDAY_THEME || "pink").toLowerCase()] || THEMES.pink;
   const cols = process.stdout.columns || 80;
-  const dim = "\x1b[90m",
-    bold = "\x1b[1m";
   const tc = truecolor();
   const letter = (i) => {
     if (!tc) return `\x1b[${theme.basic}m`;
@@ -118,56 +136,50 @@ function printBanner({ version = "", mode = "" } = {}) {
     : `\x1b[${theme.basic}m`;
 
   const cwd = path.normalize(process.cwd().replace(os.homedir(), "~"));
-  const tagline = dim + TAGLINE + RESET;
-  const meta =
-    accent +
-    "v" +
-    version +
-    RESET +
-    dim +
-    (mode ? "  ·  " + mode : "") +
-    "  ·  " +
-    cwd +
-    RESET;
+  const now = new Date();
+  const time = now.toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const exitCode = Number.isInteger(process.exitCode) ? process.exitCode : 0;
+  const core =
+    exitCode === 0 ? `${HUD.cyan}◖ 🌟 ◗${RESET}` : `${HUD.red}⎔ ⚠️ ⎔${RESET}`;
+  const status =
+    exitCode === 0
+      ? `${HUD.cyan}ONLINE // SYSTEMS NOMINAL${RESET}`
+      : `${HUD.red}ALERT // CODE_ERROR: ${exitCode}${RESET}`;
+  const telemetry = `  Telemetry: 🕒 [${HUD.white}${time}${RESET}]  🔋 [${HUD.white}${batteryInfo()}${RESET}]${gitBranch()}`;
+  const context = `  Context  : ${mode ? mode + "  ·  " : ""}${cwd}`;
 
-  const mascotW = MASCOT[0].length;
-  const wantMascot = process.env.FRIDAY_MASCOT !== "0";
   const out = [""];
 
-  if (wantMascot && cols >= 2 + mascotW + 2 + LOGO[0].length) {
-    // avatar on the left, letters + tagline on the right
-    const mascot = mascotLines(tc);
-    const right = [
-      ...LOGO.map((l, i) => letter(i) + l + RESET),
-      "",
-      tagline,
-      meta,
-    ];
-    const offset = Math.max(0, right.length - mascot.length); // sit the avatar on the "ground"
-    right.forEach((line, i) => {
-      const m = mascot[i - offset];
-      out.push(
-        "  " + (m !== undefined ? m : " ".repeat(mascotW)) + "  " + line,
-      );
-    });
-  } else if (
-    wantMascot &&
-    cols >= LOGO[0].length + 4 &&
-    (process.stdout.rows || 24) >= 24
-  ) {
-    // not wide enough for side-by-side: avatar stacked above the letters
-    mascotLines(tc).forEach((m) => out.push("  " + m));
-    LOGO.forEach((l, i) => out.push("  " + letter(i) + l + RESET));
-    out.push("", "  " + tagline, "  " + meta);
-  } else if (!wantMascot && cols >= LOGO[0].length + 4) {
-    LOGO.forEach((l, i) => out.push("  " + letter(i) + l + RESET));
-    out.push("", "  " + tagline, "  " + meta);
+  if (cols >= LOGO[0].length + 4) {
+    const width = Math.min(76, cols - 2);
+    const title = `───[ ${HUD.white}F.R.I.D.A.Y. OS v${version}${HUD.gray} ]`;
+    out.push(
+      `${HUD.gray}┌${title}${"─".repeat(Math.max(0, width - visibleLength(title)))}┐${RESET}`,
+    );
+    LOGO.forEach((line, index) =>
+      out.push(boxedLine("  " + letter(index) + line + RESET, width)),
+    );
+    out.push(
+      boxedLine(
+        `  ${core}  ${HUD.bold}${HUD.white}${greeting(now.getHours())}${RESET}`,
+        width,
+      ),
+      boxedLine(telemetry, width),
+      boxedLine(`  Status   : ${status}`, width),
+      boxedLine(context, width),
+      `${HUD.gray}└${"─".repeat(width)}┘${RESET}`,
+    );
   } else {
     out.push(
-      "  " + bold + accent + "F R I D A Y" + RESET,
-      "",
-      "  " + tagline,
-      "  " + meta,
+      "  " + HUD.bold + accent + "F R I D A Y" + RESET,
+      `  ${core}  ${HUD.white}${greeting(now.getHours())}${RESET}`,
+      telemetry,
+      `  Status   : ${status}`,
+      context,
     );
   }
   out.push("");

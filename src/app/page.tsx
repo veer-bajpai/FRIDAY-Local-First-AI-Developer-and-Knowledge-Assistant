@@ -250,6 +250,8 @@ export default function Home() {
     event.preventDefault();
     const question = message.trim();
     if (!question || isSending) return;
+    const textarea = event.currentTarget.querySelector("textarea");
+    if (textarea) textarea.style.height = "auto";
     setMessages((current) => [...current, { role: "user", content: question }]);
     setMessage("");
     setIsSending(true);
@@ -593,6 +595,23 @@ function Chat({
   onAttachFile: () => void;
   onAttachImage: () => void;
 }) {
+  const [copyFeedback, setCopyFeedback] = useState<{
+    id: string;
+    status: "copied" | "failed";
+  } | null>(null);
+
+  async function copyMessage(id: string, content: string) {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopyFeedback({ id, status: "copied" });
+    } catch {
+      setCopyFeedback({ id, status: "failed" });
+    }
+    window.setTimeout(() => {
+      setCopyFeedback((current) => (current?.id === id ? null : current));
+    }, 1600);
+  }
+
   return (
     <>
       <div className="conversation-meta">
@@ -616,41 +635,80 @@ function Chat({
             </p>
           </div>
         )}
-        {messages.map((item, index) => (
-          <div
-            className={`message ${item.role === "user" ? "user-message" : "assistant-message"}`}
-            key={`${item.role}-${index}`}
-          >
+        {messages.map((item, index) => {
+          const messageId = `${item.role}-${index}`;
+          const feedback =
+            copyFeedback?.id === messageId ? copyFeedback.status : null;
+          const copyLabel =
+            feedback === "copied"
+              ? "Message copied"
+              : feedback === "failed"
+                ? "Copy failed"
+                : "Copy message";
+
+          return (
             <div
-              className={`message-avatar ${item.role === "user" ? "user-avatar" : "assistant-avatar"}`}
+              className={`message ${item.role === "user" ? "user-message" : "assistant-message"}`}
+              key={messageId}
             >
-              {item.role === "user" ? "VB" : <Sparkles size={15} />}
-            </div>
-            <div className="message-content">
-              <div className="message-author">
-                {item.role === "user" ? "You" : "Friday"}{" "}
-                <span>{item.created_at ?? "now"}</span>
+              <div
+                className={`message-avatar ${item.role === "user" ? "user-avatar" : "assistant-avatar"}`}
+              >
+                {item.role === "user" ? "VB" : <Sparkles size={15} />}
               </div>
-              {item.role === "assistant" ? (
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  rehypePlugins={[rehypeHighlight]}
-                  components={{ pre: MarkdownCodeBlock }}
-                >
-                  {item.content}
-                </ReactMarkdown>
-              ) : (
-                <p>{item.content}</p>
-              )}
+              <div className="message-content">
+                <div className="message-heading">
+                  <div className="message-author">
+                    {item.role === "user" ? "You" : "Friday"}{" "}
+                    <span>{item.created_at ?? "now"}</span>
+                  </div>
+                  <button
+                    className="copy-message-button"
+                    type="button"
+                    aria-label={copyLabel}
+                    aria-live="polite"
+                    title={copyLabel}
+                    disabled={!item.content}
+                    onClick={() => void copyMessage(messageId, item.content)}
+                  >
+                    {feedback === "copied" ? (
+                      <Check size={14} />
+                    ) : feedback === "failed" ? (
+                      <X size={14} />
+                    ) : (
+                      <Copy size={14} />
+                    )}
+                  </button>
+                </div>
+                {item.role === "assistant" ? (
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    rehypePlugins={[rehypeHighlight]}
+                    components={{ pre: MarkdownCodeBlock }}
+                  >
+                    {item.content}
+                  </ReactMarkdown>
+                ) : (
+                  <p>{item.content}</p>
+                )}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <div className="composer-wrap">
         <form className="composer" onSubmit={onSend}>
+          <span className="composer-prompt" aria-hidden="true">
+            ›
+          </span>
           <textarea
             value={message}
-            onChange={(event) => setMessage(event.target.value)}
+            onChange={(event) => {
+              const field = event.currentTarget;
+              setMessage(field.value);
+              field.style.height = "auto";
+              field.style.height = `${Math.min(field.scrollHeight, 168)}px`;
+            }}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();

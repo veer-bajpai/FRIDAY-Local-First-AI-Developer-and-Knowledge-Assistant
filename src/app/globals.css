@@ -330,10 +330,54 @@ h2 {
   background: #ddf0df;
 }
 .message-author {
-  margin: 0 0 7px;
+  margin: 0;
   color: #455149;
   font-size: 12px;
   font-weight: 700;
+}
+.message-content {
+  flex: 1;
+  min-width: 0;
+}
+.message-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 24px;
+  margin-bottom: 7px;
+}
+.copy-message-button {
+  display: grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  flex: 0 0 auto;
+  color: #829087;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  opacity: 0;
+  transition:
+    opacity 0.15s ease,
+    color 0.15s ease,
+    background 0.15s ease;
+}
+.message:hover .copy-message-button,
+.message:focus-within .copy-message-button {
+  opacity: 1;
+}
+.copy-message-button:hover:not(:disabled) {
+  color: #477451;
+  background: #edf4ed;
+  border-color: #dce8dc;
+}
+.copy-message-button:disabled {
+  cursor: default;
+}
+@media (hover: none) {
+  .copy-message-button {
+    opacity: 1;
+  }
 }
 .message-author span {
   margin-left: 5px;
@@ -497,15 +541,34 @@ h2 {
   display: flex;
   align-items: flex-end;
   gap: 10px;
-  min-height: 60px;
-  padding: 10px 10px 10px 16px;
+  min-height: 66px;
+  padding: 12px 12px 10px 14px;
   background: #fff;
-  border: 1px solid #dfe5de;
-  border-radius: 12px;
-  box-shadow: 0 8px 30px #697c6d0b;
+  border: 1px solid #d4ded5;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px #526b570c;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.composer:focus-within {
+  border-color: #8eaa93;
+  box-shadow: 0 0 0 3px #dcebdd80;
+}
+.composer-prompt {
+  flex: 0 0 auto;
+  padding: 1px 0 2px;
+  color: #699b72;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 16px;
+  line-height: 1.6;
 }
 .composer textarea {
   flex: 1;
+  min-width: 0;
+  min-height: 24px;
+  max-height: 168px;
+  overflow-y: auto;
   resize: none;
   border: 0;
   outline: 0;

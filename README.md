@@ -110,7 +110,7 @@ Useful commands:
 | `friday setup`              | Install/cache dependencies, build, and prepare Ollama models |
 | `friday update`             | Fast-forward the CLI checkout and invalidate setup stamps    |
 
-Terminal chat supports `/new`, `/history`, `/resume <n|id>`, `/docs`, `/status`, `/sources on|off`, `/k <1-20>`, `/clear`, `/help`, and `/exit`. Banner options: `FRIDAY_THEME=cyan|orange|green|purple`, `FRIDAY_MASCOT=0`, `FRIDAY_NO_BANNER=1`; `NO_COLOR` and non-TTY output also suppress the banner.
+Terminal chat supports `/new`, `/history`, `/resume <n|id>`, `/docs`, `/status`, `/sources on|off`, `/k <1-20>`, `/clear`, `/help`, and `/exit`. The terminal HUD includes a time-based greeting, battery and git telemetry, and success/error prompt status. Banner options: `FRIDAY_THEME=pink|cyan|orange|green|purple` (pink by default), `FRIDAY_NO_BANNER=1`; `NO_COLOR` and non-TTY output also suppress the banner.
 
 ### Image uploads
 

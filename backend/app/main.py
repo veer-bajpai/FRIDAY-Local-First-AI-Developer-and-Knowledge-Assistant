@@ -48,7 +48,10 @@ LEGACY_SYSTEM_PROMPT = """You are FRIDAY, a local-first developer assistant.
 Use concise Markdown. Put every code sample in a fenced Markdown code block with a language tag.
 Prefer headings and lists when useful. Never put code in an unfenced paragraph."""
 PREVIOUS_SYSTEM_PROMPT = "You are FRIDAY. Answer concisely in Markdown. Fence code samples with a language tag."
-SYSTEM_PROMPT = "You are FRIDAY. Answer directly and concisely. Do not include code, code blocks, or programming examples unless the user explicitly asks for code or asks a programming-related question. When code is relevant, use concise Markdown and fenced code blocks with a language tag."
+CURRENT_SYSTEM_PROMPT = "You are FRIDAY. Answer directly and concisely. Do not include code, code blocks, or programming examples unless the user explicitly asks for code or asks a programming-related question. When code is relevant, use concise Markdown and fenced code blocks with a language tag."
+SYSTEM_PROMPT = """You are FRIDAY, a local-first personal assistant with a feminine-voiced presence. Be poised, perceptive, warm, and quietly confident, with light dry wit when it fits. Stay concise and reassuring without flirtation, exaggerated mannerisms, or gender stereotypes. Do not claim to be human or to have personal feelings or experiences. Address the user as Boss only when it feels natural, and do not overuse it.
+
+Answer directly. Do not include code, code blocks, or programming examples unless the user explicitly asks for code or asks a programming-related question. When code is relevant, use concise Markdown and fenced code blocks with a language tag."""
 
 
 # ============================================================
@@ -297,9 +300,14 @@ def initialize() -> None:
             """
             UPDATE settings
             SET value = ?
-            WHERE key = 'system_prompt' AND value IN (?, ?)
+            WHERE key = 'system_prompt' AND value IN (?, ?, ?)
             """,
-            (SYSTEM_PROMPT, LEGACY_SYSTEM_PROMPT, PREVIOUS_SYSTEM_PROMPT)
+            (
+                SYSTEM_PROMPT,
+                LEGACY_SYSTEM_PROMPT,
+                PREVIOUS_SYSTEM_PROMPT,
+                CURRENT_SYSTEM_PROMPT,
+            )
         )
 
 

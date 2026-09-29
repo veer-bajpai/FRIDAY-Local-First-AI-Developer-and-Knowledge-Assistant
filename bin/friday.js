@@ -54,7 +54,7 @@ if (args.includes("-h") || args.includes("--help")) {
   friday update       Pull the latest version (rebuilds on next start)
   friday --version    Print version
 
-Set FRIDAY_THEME=cyan|orange|green|purple to change banner colour; FRIDAY_NO_BANNER=1 hides it.
+Set FRIDAY_THEME=pink|cyan|orange|green|purple to change banner colour (pink by default); FRIDAY_NO_BANNER=1 hides it. The terminal HUD shows live time, battery, git branch, and command status.
 Terminal chat shares history with the web UI. Data: ~/.friday/data (override with FRIDAY_DATA_DIR)`);
   process.exit(0);
 }
