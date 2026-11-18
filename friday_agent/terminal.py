@@ -77,6 +77,7 @@ SIDE_MIN_WIDTH = 110
 COMPACT_WIDTH = 110
 
 BUILTIN_COMMANDS: list[tuple[str, str, str]] = [
+    ("MODES & CONTEXT", "/model [n|name]", "list installed models or switch"),
     ("MODES & CONTEXT", "/plan", "toggle read-only planning mode"),
     ("MODES & CONTEXT", "/context", "context and token usage"),
     ("MODES & CONTEXT", "/compact", "summarise history to free context"),
@@ -959,6 +960,8 @@ class FridayAgentApp(App[None]):
             self.action_toggle_panel()
         elif name == "plan":
             await self._toggle_plan()
+        elif name == "model":
+            await self._switch_model(arg)
         elif name == "rewind":
             count = int(arg or "1")
             result = await self._json("POST", self._session_path + "/rewind", {"count": count})
@@ -1019,6 +1022,25 @@ class FridayAgentApp(App[None]):
             await self._run_turn(self.custom_commands[name].replace("$ARGUMENTS", arg), label=line)
         else:
             raise ValueError(f"Unknown command /{name}. Try /help.")
+
+    async def _switch_model(self, arg: str) -> None:
+        info = await self._json("GET", "/api/agent/models")
+        names = sorted({m.get("name") if isinstance(m, dict) else str(m) for m in info.get("models") or []} - {None, ""})
+        if not arg:
+            if not names:
+                self._write_warn("no installed models found · is Ollama running? (ollama pull llama3.2)")
+                return
+            for index, model in enumerate(names, 1):
+                marker = "●" if model == self.model else " "
+                self._write_system(f"{marker} {index:>2}  {model}")
+            self._write_system("switch with /model <number> or /model <name>")
+            return
+        target = names[int(arg) - 1] if arg.isdigit() and 1 <= int(arg) <= len(names) else arg
+        result = await self._json("PATCH", self._session_path, {"model": target})
+        self.model = result.get("model", target)
+        self._render_hud()
+        self._render_side()
+        self._write_system(f"model {self.model}")
 
     async def _toggle_plan(self) -> None:
         target = "default" if self.mode == "plan" else "plan"

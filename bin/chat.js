@@ -1,303 +1,568 @@
-"use strict";
-/* eslint-disable @typescript-eslint/no-require-imports */
-/**
- * Terminal chat for FRIDAY. Talks to the existing FastAPI backend
- * (/api/chat/stream, /api/conversations, ...) — same data as the web UI.
- * No dependencies (Node 20+ built-in fetch + readline).
+#!/usr/bin/env node
+/*
+ * FRIDAY terminal chat — "Classic Mono" design.
+ * Dependency-free (Node 20+). Talks to the same backend as the web app:
+ *   POST /api/chat/stream (SSE: {meta} {token}... {done}|{error}),
+ *   /api/conversations, /api/documents, /api/status.
+ *
+ *   node bin/chat.js                 interactive chat
+ *   node bin/chat.js -p "question"   ask once and exit
+ *   node bin/chat.js --api http://127.0.0.1:8000
+ *
+ * Env: FRIDAY_API_URL, FRIDAY_API_TOKEN, FRIDAY_DATA_DIR, FRIDAY_NO_BANNER=1, NO_COLOR.
  */
+"use strict";
+
+const fs = require("fs");
+const path = require("path");
 const readline = require("readline");
 
-const tty = process.stdout.isTTY;
-const paint = (n, s) => (tty ? `\x1b[${n}m${s}\x1b[0m` : s);
-const dim = (s) => paint(90, s),
-  cyan = (s) => paint(36, s),
-  green = (s) => paint(32, s);
-const red = (s) => paint(31, s),
-  yellow = (s) => paint(33, s),
-  bold = (s) => paint(1, s);
+// ───────────────────────────── style ─────────────────────────────
+const TTY = Boolean(process.stdout.isTTY);
+const COLOR = TTY && !process.env.NO_COLOR && process.env.TERM !== "dumb";
+const esc = (code) => (s) => (COLOR ? `\x1b[${code}m${s}\x1b[0m` : String(s));
+const rgb = (r, g, b) => esc(`38;2;${r};${g};${b}`);
+const c = {
+  accent: rgb(255, 148, 40), // FRIDAY orange
+  text: rgb(212, 212, 216),
+  muted: rgb(130, 130, 138),
+  faint: rgb(86, 86, 92),
+  rule: rgb(58, 58, 62),
+  ok: rgb(127, 191, 127),
+  err: rgb(232, 110, 100),
+  code: rgb(232, 192, 125),
+  kw: rgb(158, 203, 255),
+  bold: esc("1"),
+  italic: esc("3"),
+};
+const ANSI = /\x1b\[[0-9;]*m/g;
+const visible = (s) => s.replace(ANSI, "").length;
+const width = () => Math.max(40, Math.min((process.stdout.columns || 90) - 2, 100));
+const out = (s = "") => process.stdout.write(s + "\n");
 
-const HELP = `
-  ${bold("Commands")}
-  /new              start a new conversation
-  /history          list recent conversations
-  /resume <n|id>    continue a conversation from /history
-  /docs             list indexed documents
-  /status           show Ollama / model status
-  /sources on|off   show or hide source references (default on)
-  /k <1-20>         number of chunks to retrieve
-  /clear            clear the screen
-  /help             show this help
-  /exit             quit  (Ctrl+C at an empty prompt also quits)
-
-  End a line with \\ to continue on the next line.
-  While FRIDAY is answering, Ctrl+C stops the answer.
-`;
-
-async function start({ api, args = [] }) {
-  const state = { convId: null, k: null, showSources: true, history: [] };
-  let controller = null;
-
-  const call = async (method, path, body) => {
-    const res = await fetch(api + path, {
-      method,
-      headers: body ? { "Content-Type": "application/json" } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    if (!res.ok)
-      throw new Error(`${res.status} ${(await res.text()).slice(0, 200)}`);
-    return res.json();
-  };
-
-  async function ask(question) {
-    controller = new AbortController();
-    let failed = false;
-    process.stdout.write("\n" + green("friday › "));
-    let res;
-    try {
-      res = await fetch(api + "/api/chat/stream", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: controller.signal,
-        body: JSON.stringify({
-          question,
-          conversation_id: state.convId || undefined,
-          k: state.k || undefined,
-        }),
-      });
-      if (!res.ok)
-        throw new Error(`${res.status} ${(await res.text()).slice(0, 200)}`);
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        let i;
-        while ((i = buf.indexOf("\n\n")) >= 0) {
-          const block = buf.slice(0, i);
-          buf = buf.slice(i + 2);
-          for (const line of block.split("\n")) {
-            if (!line.startsWith("data: ")) continue;
-            let msg;
-            try {
-              msg = JSON.parse(line.slice(6));
-            } catch {
-              continue;
-            }
-            if (msg.token) process.stdout.write(msg.token);
-            if (msg.error) {
-              failed = true;
-              process.stdout.write("\n" + red(msg.error));
-            }
-            if (msg.done) {
-              state.convId = msg.conversation_id || state.convId;
-              const seen = new Set();
-              const refs = (msg.sources || [])
-                .map((s) => `${s.title}#${s.chunk}`)
-                .filter((r) => !seen.has(r) && seen.add(r));
-              if (state.showSources && refs.length)
-                process.stdout.write(
-                  "\n" + dim("  sources: " + refs.join(", ")),
-                );
-            }
-          }
-        }
-      }
-      process.stdout.write("\n\n");
-      return !failed;
-    } catch (e) {
-      if (e.name === "AbortError")
-        process.stdout.write(dim("\n  (stopped)\n\n"));
-      else process.stdout.write("\n" + red("  error: " + e.message) + "\n\n");
-      return false;
-    } finally {
-      controller = null;
-    }
+function wrap(text, indent, first = indent) {
+  const max = width() - visible(indent);
+  const words = text.split(/( +)/);
+  const lines = [];
+  let line = "";
+  for (const w of words) {
+    if (visible(line) + visible(w) > max && visible(line) > 0) {
+      lines.push(line.replace(/ +$/, ""));
+      line = /^ +$/.test(w) ? "" : w;
+    } else line += w;
   }
-
-  async function command(line) {
-    const [name, ...rest] = line.trim().split(/\s+/);
-    const arg = rest.join(" ");
-    switch (name) {
-      case "/help":
-        console.log(HELP);
-        break;
-      case "/exit":
-      case "/quit":
-        return "exit";
-      case "/clear":
-        process.stdout.write("\x1b[2J\x1b[H");
-        break;
-      case "/new":
-        state.convId = null;
-        console.log(dim("  new conversation\n"));
-        break;
-      case "/status": {
-        const s = await call("GET", "/api/status");
-        console.log(
-          `  ollama: ${s.ollama === "online" ? green("online") : red("offline")}   chat model: ${s.generation_model}   embeddings: ${s.embedding_model}   documents: ${s.documents}\n`,
-        );
-        break;
-      }
-      case "/docs": {
-        const docs = await call("GET", "/api/documents");
-        if (!docs.length)
-          console.log(dim("  no documents yet — upload some in the web UI\n"));
-        else {
-          docs.forEach((d) =>
-            console.log("  • " + (d.title || d.name || d.filename || d.id)),
-          );
-          console.log();
-        }
-        break;
-      }
-      case "/history": {
-        state.history = (await call("GET", "/api/conversations")).slice(0, 15);
-        if (!state.history.length) console.log(dim("  no conversations yet\n"));
-        else {
-          state.history.forEach((c, i) =>
-            console.log(
-              `  ${cyan(String(i + 1).padStart(2))}  ${c.title}  ${dim(c.updated_at || "")}`,
-            ),
-          );
-          console.log(dim("\n  /resume <n> to continue one\n"));
-        }
-        break;
-      }
-      case "/resume": {
-        if (!arg) {
-          console.log(yellow("  usage: /resume <n|id>  (see /history)\n"));
-          break;
-        }
-        const id =
-          /^\d+$/.test(arg) && state.history[+arg - 1]
-            ? state.history[+arg - 1].id
-            : arg;
-        const conv = await call(
-          "GET",
-          "/api/conversations/" + encodeURIComponent(id),
-        );
-        state.convId = conv.id;
-        console.log(bold("\n  " + conv.title) + "\n");
-        for (const m of conv.messages)
-          console.log(
-            (m.role === "user" ? cyan("you › ") : green("friday › ")) +
-              m.content +
-              "\n",
-          );
-        break;
-      }
-      case "/sources":
-        state.showSources = arg !== "off";
-        console.log(dim(`  sources ${state.showSources ? "on" : "off"}\n`));
-        break;
-      case "/k": {
-        const n = parseInt(arg, 10);
-        if (n >= 1 && n <= 20) {
-          state.k = n;
-          console.log(dim(`  retrieving ${n} chunks\n`));
-        } else console.log(yellow("  usage: /k <1-20>\n"));
-        break;
-      }
-      default:
-        console.log(yellow(`  unknown command ${name} — try /help\n`));
-    }
-  }
-
-  // ---- one-shot mode: friday chat -p "question" ----
-  const p = args.findIndex((a) => a === "-p" || a === "--print");
-  if (p >= 0) {
-    const q = args
-      .slice(p + 1)
-      .filter((a) => !a.startsWith("-"))
-      .join(" ")
-      .trim();
-    if (!q) {
-      console.error('usage: friday chat -p "your question"');
-      return 1;
-    }
-    state.showSources = false;
-    return (await ask(q)) ? 0 : 1;
-  }
-
-  // ---- interactive REPL ----
-  let status = "";
-  try {
-    const s = await call("GET", "/api/status");
-    status = `${s.generation_model} · ollama ${s.ollama} · ${s.documents} docs`;
-  } catch {}
-  console.log("\n" + dim(status));
-  console.log(dim("  /help for commands · Ctrl+C to quit\n"));
-
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    prompt: cyan("you › "),
-  });
-  let pending = "";
-  let queue = Promise.resolve();
-  let inputClosed = false;
-  let exiting = false;
-
-  rl.on("SIGINT", () => {
-    if (controller) controller.abort();
-    else {
-      console.log();
-      exiting = true;
-      rl.close();
-    }
-  });
-
-  const processLine = async (raw) => {
-    if (exiting) return;
-    if (raw.endsWith("\\")) {
-      pending += raw.slice(0, -1) + "\n";
-      process.stdout.write(dim("  … "));
-      if (!inputClosed && !rl.closed) rl.prompt();
-      return;
-    }
-
-    const line = (pending + raw).trim();
-    pending = "";
-    if (line) {
-      if (line.startsWith("/")) {
-        if ((await command(line)) === "exit") {
-          exiting = true;
-          rl.close();
-          return;
-        }
-      } else if (line.length > 4000) {
-        console.log(red("  message too long (max 4000 characters)\n"));
-      } else {
-        await ask(line);
-      }
-    }
-    if (!inputClosed && !rl.closed) rl.prompt();
-  };
-
-  const closed = new Promise((resolve) => {
-    rl.on("close", () => {
-      inputClosed = true;
-      queue.then(
-        () => resolve(0),
-        () => resolve(0),
-      );
-    });
-  });
-
-  rl.on("line", (raw) => {
-    queue = queue
-      .then(() => processLine(raw))
-      .catch((e) => {
-        console.log(red("  error: " + e.message) + "\n");
-        if (!inputClosed && !rl.closed) rl.prompt();
-      });
-  });
-
-  rl.prompt();
-  return closed;
+  lines.push(line);
+  return lines.map((l, i) => (i === 0 ? first : indent) + l).join("\n");
 }
 
-module.exports = { start };
+function inline(s) {
+  return s
+    .replace(/`([^`]+)`/g, (_, x) => c.code(x))
+    .replace(/\*\*([^*]+)\*\*/g, (_, x) => c.bold(x))
+    .replace(/(^|[^*\w])\*([^*\s][^*]*)\*(?=[^*\w]|$)/g, (_, p, x) => p + c.italic(x))
+    .replace(/_\[([^\]]+)\]_/g, (_, x) => c.muted(`[${x}]`))
+    .replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, (_, t, u) => `${t} ${c.faint(u)}`);
+}
+
+// Markdown → terminal, one completed line at a time (so it works while streaming).
+class Renderer {
+  constructor(pad = "  ") {
+    this.pad = pad;
+    this.fence = null;
+    this.first = true;
+  }
+  line(raw) {
+    const pad = this.pad;
+    const lead = this.first ? `${c.accent("◆")} ` : pad;
+    const fence = raw.match(/^\s*```\s*([\w+#.-]*)/);
+    if (fence) {
+      if (this.fence === null) {
+        this.fence = fence[1] || "code";
+        const label = ` ${this.fence} `;
+        if (this.first) out(c.accent("◆"));
+        out(pad + c.faint("┌" + label + "─".repeat(Math.max(4, Math.min(48, width() - 12) - label.length))));
+      } else {
+        this.fence = null;
+        out(pad + c.faint("└" + "─".repeat(Math.max(4, Math.min(48, width() - 12)))));
+      }
+      this.first = false;
+      return;
+    }
+    if (this.fence !== null) {
+      out(pad + c.faint("│ ") + c.kw(raw));
+      return;
+    }
+    if (!raw.trim()) {
+      if (!this.first) out("");
+      return;
+    }
+    let m;
+    if ((m = raw.match(/^(#{1,6})\s+(.*)/))) {
+      out(wrap(c.bold(c.text(inline(m[2]))), pad, lead));
+    } else if ((m = raw.match(/^(\s*)[-*+]\s+(.*)/))) {
+      const deep = pad + "  ".repeat(Math.min(3, Math.floor(m[1].length / 2)));
+      out(wrap(inline(m[2]), deep + "  ", (this.first ? lead : deep) + c.muted("• ")));
+    } else if ((m = raw.match(/^(\s*)(\d+)[.)]\s+(.*)/))) {
+      const n = `${m[2]}. `;
+      out(wrap(inline(m[3]), pad + " ".repeat(n.length), (this.first ? lead : pad) + c.muted(n)));
+    } else if ((m = raw.match(/^>\s?(.*)/))) {
+      out(wrap(c.muted(inline(m[1])), pad + c.rule("│ "), (this.first ? lead : pad) + c.rule("│ ")));
+    } else if (/^\s*([-*_])\1{2,}\s*$/.test(raw)) {
+      out(pad + c.rule("─".repeat(Math.min(40, width() - 4))));
+    } else {
+      out(wrap(inline(raw), pad, lead));
+    }
+    this.first = false;
+  }
+  end() {
+    if (this.fence !== null) this.line("```");
+  }
+}
+
+// ───────────────────────────── api ─────────────────────────────
+function readToken() {
+  if (process.env.FRIDAY_API_TOKEN) return process.env.FRIDAY_API_TOKEN.trim();
+  const dirs = [process.env.FRIDAY_DATA_DIR, path.join(__dirname, "..", "data"), path.join(process.cwd(), "data")];
+  for (const d of dirs) {
+    if (!d) continue;
+    try {
+      return fs.readFileSync(path.join(d, "api_token"), "utf8").trim();
+    } catch {}
+  }
+  return "";
+}
+
+class Api {
+  constructor(base) {
+    this.base = String(base || "http://127.0.0.1:8000").replace(/\/+$/, "");
+    const token = readToken();
+    this.headers = { "Content-Type": "application/json", ...(token ? { "X-Friday-Token": token } : {}) };
+  }
+  async json(method, url, body) {
+    const res = await fetch(this.base + url, {
+      method,
+      headers: this.headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try {
+        detail = (await res.json()).detail || detail;
+      } catch {}
+      throw new Error(`${res.status} ${typeof detail === "string" ? detail : JSON.stringify(detail)}`);
+    }
+    return res.json();
+  }
+  async *stream(body, signal) {
+    const res = await fetch(this.base + "/api/chat/stream", {
+      method: "POST",
+      headers: this.headers,
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (!res.ok || !res.body) {
+      let detail = res.statusText;
+      try {
+        detail = (await res.json()).detail || detail;
+      } catch {}
+      throw new Error(`${res.status} ${typeof detail === "string" ? detail : JSON.stringify(detail)}`);
+    }
+    const decoder = new TextDecoder();
+    let buf = "";
+    for await (const chunk of res.body) {
+      buf += decoder.decode(chunk, { stream: true });
+      let i;
+      while ((i = buf.indexOf("\n\n")) >= 0) {
+        const frame = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        const data = frame
+          .split("\n")
+          .filter((l) => l.startsWith("data:"))
+          .map((l) => l.slice(5).trimStart())
+          .join("\n");
+        if (data) {
+          try {
+            yield JSON.parse(data);
+          } catch {}
+        }
+      }
+    }
+  }
+}
+
+// ───────────────────────────── spinner ─────────────────────────────
+class Spinner {
+  constructor() {
+    this.timer = null;
+  }
+  start() {
+    if (!TTY) return;
+    const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    const words = ["Thinking", "Searching your documents", "Reading context", "Writing"];
+    const t0 = Date.now();
+    let i = 0;
+    process.stdout.write("\x1b[?25l");
+    this.timer = setInterval(() => {
+      const s = (Date.now() - t0) / 1000;
+      const word = words[Math.min(words.length - 1, Math.floor(s / 2.5))];
+      process.stdout.write(`\r\x1b[2K${c.accent(frames[i++ % frames.length])} ${c.muted(word + "…")}  ${c.faint(s.toFixed(1) + "s")}`);
+    }, 90);
+  }
+  stop() {
+    if (!this.timer) return;
+    clearInterval(this.timer);
+    this.timer = null;
+    process.stdout.write("\r\x1b[2K\x1b[?25h");
+  }
+}
+
+// ───────────────────────────── chat ─────────────────────────────
+const HELP = [
+  ["/new", "start a new conversation"],
+  ["/history", "list recent conversations"],
+  ["/resume <n|id>", "continue a conversation"],
+  ["/model [n|name]", "list installed models or switch"],
+  ["/docs", "list your documents"],
+  ["/status", "backend, model and document count"],
+  ["/sources on|off", "show or hide sources under answers"],
+  ["/k <1-20>", "how many passages to retrieve"],
+  ["/clear", "clear the screen"],
+  ["/exit", "quit (or ctrl+c)"],
+];
+
+class Chat {
+  constructor(api) {
+    this.api = api;
+    this.conversationId = null;
+    this.showSources = true;
+    this.k = null;
+    this.lastOk = true;
+    this.history = [];
+    this.busy = null;
+  }
+
+  async header() {
+    if (process.env.FRIDAY_NO_BANNER === "1") return;
+    let model = "offline";
+    let docs = "?";
+    let online = false;
+    try {
+      const s = await this.api.json("GET", "/api/status");
+      model = s.generation_model || "model";
+      docs = s.documents ?? "?";
+      online = s.ollama === "online";
+    } catch {}
+    const dot = online ? c.ok("●") : c.err("●");
+    out("");
+    out(`${c.accent("▌FRIDAY")}${c.muted(`  ·  ${model}  ·  ${docs} docs  ·  `)}${dot}${c.muted(online ? " online" : " ollama offline")}`);
+    out(c.rule("─".repeat(Math.min(width(), 72))));
+    out("");
+  }
+
+  hint() {
+    if (TTY) out(c.faint("  /help · /docs · /new · ctrl+c quit"));
+  }
+
+  async ask(question) {
+    const spinner = new Spinner();
+    const r = new Renderer();
+    const controller = new AbortController();
+    this.busy = controller;
+    const t0 = Date.now();
+    let line = "";
+    let started = false;
+    let done = null;
+    let error = null;
+    out("");
+    spinner.start();
+    try {
+      const body = { question, conversation_id: this.conversationId };
+      if (this.k) body.k = this.k;
+      for await (const ev of this.api.stream(body, controller.signal)) {
+        if (ev.token !== undefined) {
+          if (!started) {
+            spinner.stop();
+            started = true;
+          }
+          line += ev.token;
+          let i;
+          while ((i = line.indexOf("\n")) >= 0) {
+            r.line(line.slice(0, i));
+            line = line.slice(i + 1);
+          }
+        } else if (ev.done) {
+          done = ev;
+        } else if (ev.error) {
+          error = ev.error;
+          if (ev.conversation_id) this.conversationId = ev.conversation_id;
+        }
+      }
+    } catch (e) {
+      error = e.name === "AbortError" ? "stopped" : friendly(e);
+    } finally {
+      spinner.stop();
+      this.busy = null;
+    }
+    if (line) r.line(line);
+    r.end();
+    const secs = ((Date.now() - t0) / 1000).toFixed(1);
+    if (done) {
+      this.conversationId = done.conversation_id || this.conversationId;
+      const sources = done.sources || [];
+      if (this.showSources && sources.length) {
+        out("");
+        const list = sources
+          .slice(0, 6)
+          .map((s, n) => `${c.faint(`[${n + 1}]`)} ${c.muted((s.title || s.name || "source") + (s.page ? ` p.${s.page}` : ""))}`)
+          .join("  ");
+        out(wrap(list, "    ", `  ${c.faint("sources")}  `));
+      }
+      const extra = [done.model, done.note, done.truncated ? "reply hit the token limit" : null].filter(Boolean);
+      out(`  ${c.faint(`answered in ${secs}s${extra.length ? " · " + extra.join(" · ") : ""}`)}`);
+      this.lastOk = true;
+    } else {
+      out(`  ${error === "stopped" ? c.muted("stopped") : c.err("✗ " + (error || "no reply from FRIDAY"))}`);
+      this.lastOk = false;
+    }
+    out("");
+    return Boolean(done);
+  }
+
+  async command(input) {
+    const [name, ...rest] = input.slice(1).trim().split(/\s+/);
+    const arg = rest.join(" ");
+    switch ((name || "").toLowerCase()) {
+      case "help":
+      case "?":
+        out("");
+        for (const [k, v] of HELP) out(`  ${c.text(k.padEnd(18))}${c.muted(v)}`);
+        out("");
+        return;
+      case "new":
+        this.conversationId = null;
+        out(c.muted("  new conversation\n"));
+        return;
+      case "history": {
+        this.history = (await this.api.json("GET", "/api/conversations")).slice(0, 15);
+        out("");
+        if (!this.history.length) out(c.muted("  no conversations yet"));
+        this.history.forEach((h, i) => {
+          const mark = h.id === this.conversationId ? c.accent("›") : " ";
+          out(` ${mark}${c.faint(String(i + 1).padStart(3))}  ${c.text(trim(h.title || "Untitled", width() - 30))}  ${c.faint(when(h.updated_at))}`);
+        });
+        out(c.faint("\n  /resume <n> to continue one\n"));
+        return;
+      }
+      case "resume": {
+        if (!arg) return out(c.muted("  usage: /resume <n|id>\n"));
+        if (!this.history.length) this.history = (await this.api.json("GET", "/api/conversations")).slice(0, 15);
+        const pick = /^\d+$/.test(arg) && Number(arg) <= this.history.length ? this.history[Number(arg) - 1].id : arg;
+        const conv = await this.api.json("GET", `/api/conversations/${encodeURIComponent(pick)}`);
+        this.conversationId = conv.id;
+        out(`\n  ${c.muted("resumed")} ${c.text(conv.title || "conversation")}\n`);
+        for (const m of (conv.messages || []).slice(-4)) {
+          if (m.role === "user") out(`${c.muted("›")} ${c.muted(trim(m.content, width() - 4))}`);
+          else out(`${c.accent("◆")} ${c.faint(trim(m.content.replace(/\s+/g, " "), width() - 4))}`);
+        }
+        out("");
+        return;
+      }
+      case "model":
+      case "models": {
+        const [tags, status] = await Promise.all([
+          this.api.json("GET", "/api/models"),
+          this.api.json("GET", "/api/status").catch(() => ({})),
+        ]);
+        const names = [...new Set((tags.models || []).map((m) => (typeof m === "string" ? m : m.name)).filter(Boolean))]
+          .filter((n) => !/embed/i.test(n))
+          .sort();
+        const current = status.generation_model;
+        if (!arg) {
+          out("");
+          if (!names.length) out(c.muted("  no models found — is Ollama running? try: ollama pull llama3.2"));
+          names.forEach((n, i) => {
+            const on = n === current;
+            out(`  ${on ? c.accent("●") : " "}${c.faint(String(i + 1).padStart(3))}  ${on ? c.text(n) : c.muted(n)}`);
+          });
+          out(c.faint("\n  /model <number> or /model <name> to switch\n"));
+          return;
+        }
+        const pick = /^\d+$/.test(arg) && Number(arg) >= 1 && Number(arg) <= names.length ? names[Number(arg) - 1] : arg;
+        const saved = await this.api.json("PUT", "/api/settings", { model: pick });
+        out(`  ${c.accent("●")} ${c.muted("model")} ${c.text(saved.model || pick)}\n`);
+        return;
+      }
+      case "docs": {
+        const docs = await this.api.json("GET", "/api/documents");
+        out("");
+        if (!docs.length) out(c.muted("  no documents yet — add some in the web app"));
+        for (const d of docs.slice(0, 30)) {
+          const state = d.status && d.status !== "ready" ? c.faint(` (${d.status})`) : "";
+          out(`  ${c.faint("•")} ${c.text(trim(d.name || d.title || d.id, width() - 20))}${state}`);
+        }
+        if (docs.length > 30) out(c.faint(`  …and ${docs.length - 30} more`));
+        out("");
+        return;
+      }
+      case "status": {
+        const s = await this.api.json("GET", "/api/status");
+        out("");
+        const row = (k, v) => out(`  ${c.muted(k.padEnd(12))}${c.text(v)}`);
+        row("backend", this.api.base);
+        row("ollama", s.ollama === "online" ? c.ok("online") : c.err(String(s.ollama)));
+        row("model", String(s.generation_model));
+        row("embeddings", String(s.embedding_model));
+        row("documents", String(s.documents));
+        row("sources", this.showSources ? "shown" : "hidden");
+        row("k", this.k ? String(this.k) : "default");
+        out("");
+        return;
+      }
+      case "sources":
+        if (!/^(on|off)$/i.test(arg)) return out(c.muted("  usage: /sources on|off\n"));
+        this.showSources = arg.toLowerCase() === "on";
+        return out(c.muted(`  sources ${this.showSources ? "shown" : "hidden"}\n`));
+      case "k": {
+        const n = Number(arg);
+        if (!Number.isInteger(n) || n < 1 || n > 20) return out(c.muted("  usage: /k <1-20>\n"));
+        this.k = n;
+        return out(c.muted(`  retrieving ${n} passages\n`));
+      }
+      case "clear":
+        process.stdout.write("\x1b[2J\x1b[H");
+        return this.header();
+      case "exit":
+      case "quit":
+      case "q":
+        return "exit";
+      default:
+        out(c.muted(`  unknown command /${name} — try /help\n`));
+    }
+  }
+
+  async interactive() {
+    await this.header();
+    this.hint();
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+      terminal: TTY,
+      historySize: 200,
+      completer: (line) => {
+        const all = HELP.map(([k]) => k.split(" ")[0]);
+        const hits = all.filter((k) => k.startsWith(line));
+        return [line.startsWith("/") ? hits : [], line];
+      },
+    });
+    const prompt = () => {
+      rl.setPrompt((this.lastOk ? c.muted("› ") : c.err("› ")));
+      rl.prompt();
+    };
+    let lastInterrupt = 0;
+    rl.on("SIGINT", () => {
+      if (this.busy) return this.busy.abort();
+      if (rl.line) {
+        rl.write(null, { ctrl: true, name: "u" });
+        return;
+      }
+      if (Date.now() - lastInterrupt < 1500) return rl.close();
+      lastInterrupt = Date.now();
+      out(c.faint("\n  press ctrl+c again to quit"));
+      prompt();
+    });
+    prompt();
+    for await (const raw of rl) {
+      const input = raw.trim();
+      if (!input) {
+        prompt();
+        continue;
+      }
+      try {
+        if (input.startsWith("/")) {
+          if ((await this.command(input)) === "exit") break;
+        } else {
+          await this.ask(input);
+        }
+      } catch (e) {
+        out(c.err(`  ✗ ${friendly(e)}\n`));
+        this.lastOk = false;
+      }
+      prompt();
+    }
+    rl.close();
+    out(c.faint("  bye"));
+  }
+}
+
+function friendly(e) {
+  const msg = String((e && e.message) || e);
+  if (/ECONNREFUSED|fetch failed/i.test(msg) || (e && e.cause && e.cause.code === "ECONNREFUSED"))
+    return "can't reach the FRIDAY backend — start it with `friday` and try again";
+  if (/TimeoutError|aborted due to timeout/i.test(msg)) return "the backend took too long to answer";
+  return msg;
+}
+const trim = (s, n) => (String(s).length > n ? String(s).slice(0, Math.max(1, n - 1)) + "…" : String(s));
+function when(iso) {
+  const t = Date.parse(iso);
+  if (!t) return "";
+  const m = Math.round((Date.now() - t) / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  if (m < 1440) return `${Math.round(m / 60)}h ago`;
+  return new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+// ───────────────────────────── entry ─────────────────────────────
+function parseArgs(argv) {
+  const opts = { api: process.env.FRIDAY_API_URL, prompt: null };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "-p" || a === "--prompt" || a === "--print") opts.prompt = argv[++i] || "";
+    else if (a === "--api" || a === "--url") opts.api = argv[++i];
+    else if (a === "chat") continue;
+    else if (opts.prompt === null && !a.startsWith("-") && i === argv.length - 1 && argv.includes("-p")) opts.prompt = a;
+  }
+  return opts;
+}
+
+/**
+ * Start the chat. Accepts any of:
+ *   run()                               read process.argv
+ *   run(["-p", "question"])             argv array
+ *   run({ api, prompt })                options (also apiUrl/baseUrl/url/port and p/question)
+ *   run("http://127.0.0.1:8000", opts)  base URL first
+ * Resolves with an exit code.
+ */
+async function run(a, b) {
+  let opts;
+  if (Array.isArray(a)) opts = parseArgs(a);
+  else if (typeof a === "string" && /^https?:\/\//.test(a)) opts = { ...parseArgs([]), ...(b || {}), api: a };
+  else if (a && typeof a === "object") opts = { ...parseArgs([]), ...a };
+  else opts = parseArgs(process.argv.slice(2));
+  if (b && typeof b === "object" && !Array.isArray(b) && typeof a !== "string") opts = { ...opts, ...b };
+  const base = opts.api || opts.apiUrl || opts.baseUrl || opts.url || (opts.port ? `http://127.0.0.1:${opts.port}` : undefined);
+  const prompt = opts.prompt ?? opts.p ?? opts.question ?? null;
+  const chat = new Chat(new Api(base));
+  if (prompt !== null && prompt !== undefined && prompt !== false) {
+    if (!String(prompt).trim()) {
+      out(c.err("✗ -p needs a question"));
+      return 2;
+    }
+    return (await chat.ask(String(prompt))) ? 0 : 1;
+  }
+  await chat.interactive();
+  return 0;
+}
+
+module.exports = { run, main: run, start: run, startChat: run, chat: run, runChat: run, default: run };
+
+if (require.main === module) {
+  run().then(
+    (code) => process.exit(code || 0),
+    (e) => {
+      out(c.err(`✗ ${friendly(e)}`));
+      process.exit(1);
+    }
+  );
+}

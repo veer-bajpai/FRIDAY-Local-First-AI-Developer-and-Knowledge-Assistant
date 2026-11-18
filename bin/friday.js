@@ -1,4 +1,10 @@
 #!/usr/bin/env node
+// >>> friday agent command
+if (process.argv[2] === "agent") {
+  require("./agent.js").main(process.argv.slice(3));
+  return;
+}
+// <<< friday agent command
 /**
  * friday — launcher for FRIDAY.
  *   friday          set up anything missing (deps, Ollama models), then start

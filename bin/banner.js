@@ -1,13 +1,17 @@
-"use strict";
-/* eslint-disable @typescript-eslint/no-require-imports */
-/**
- * Startup banner for FRIDAY: a pixel-art avatar + big block letters.
- * Auto-skipped when output isn't a terminal, NO_COLOR is set, or FRIDAY_NO_BANNER=1.
- *   FRIDAY_THEME  = cyan (default) | orange | green | purple   (colour of the letters)
- *   FRIDAY_MASCOT = 0                                          (hide the avatar)
+/*
+ * FRIDAY startup banner — "Modern Classic", orange.
+ * Dependency-free. Printed once per process; hidden when output is not a terminal,
+ * when NO_COLOR is set, with FRIDAY_NO_BANNER=1, and for one-shot `-p` questions.
+ *
+ * Works with any way the launcher calls it: banner(), banner.print(), printBanner(opts),
+ * renderBanner(opts) ... every call prints the banner (once) and returns "" so a caller
+ * that writes the return value prints nothing extra.
  */
-const os = require("os");
+"use strict";
+
+const fs = require("fs");
 const path = require("path");
+const os = require("os");
 
 const LOGO = [
   "███████╗██████╗ ██╗██████╗  █████╗ ██╗   ██╗",
@@ -17,161 +21,78 @@ const LOGO = [
   "██║     ██║  ██║██║██████╔╝██║  ██║   ██║   ",
   "╚═╝     ╚═╝  ╚═╝╚═╝╚═════╝ ╚═╝  ╚═╝   ╚═╝   ",
 ];
-const TAGLINE = "Fast Retrieval, Intelligent Dialogue & Autonomous Yield";
+// warm amber → deep orange, top to bottom
+const SHADES = [[255, 196, 92], [255, 172, 64], [255, 148, 40], [246, 124, 28], [232, 102, 22], [150, 70, 20]];
 
-// Pixel-art avatar of FRIDAY (woman with an AI headset). Each terminal line shows 2 pixel rows (half-blocks).
-const MASCOT = [
-  ".......OOOOOOOOOO.......",
-  "......OGGGGggGGGGO......",
-  "....OGGHHhHHHHhHHGGO....",
-  "...OGHHHHSSSSSSHHHHGO...",
-  "...OGHHSSSSSSSSSSHHGO...",
-  "...GGGSEESSSSSSEESGGG...",
-  "...GgGSWCSSSSSSCWSGgG...",
-  "...GgGSSSSSssSSSSSGgG...",
-  "...GGGSPPSSSSSSPPSGGG...",
-  "...OGGGGGgSRRSSSSSHHO...",
-  "....OHHSSSSSSSSSSHHO....",
-  ".....OHHSSSSSSSSHHO.....",
-  "......OHHHSSSSHHHO......",
-  "...OJJJJJJSSSSJJJJJJO...",
-  "..OJJJJJJJJJJJJJJJJJJO..",
-  "..OOOOOOOOOOOOOOOOOOOO..",
-];
-const PALETTE = {
-  O: [30, 18, 16], // outline
-  H: [58, 34, 28], // hair
-  h: [120, 74, 54], // hair highlight
-  S: [238, 190, 160], // skin
-  s: [205, 145, 120], // nose shadow
-  E: [25, 15, 12], // lashes / brows
-  W: [255, 255, 255], // eye white
-  C: [0, 190, 230], // iris
-  R: [190, 55, 80], // lips
-  P: [230, 140, 135], // blush
-  G: [38, 48, 68], // headset
-  g: [0, 229, 255], // headset glow
-  J: [45, 55, 80], // jacket
-};
+let printed = false;
 
-const THEMES = {
-  cyan: { from: [0, 229, 255], to: [41, 121, 255], basic: 36 },
-  orange: { from: [240, 150, 110], to: [204, 95, 60], basic: 33 },
-  green: { from: [105, 240, 174], to: [0, 200, 120], basic: 32 },
-  purple: { from: [206, 147, 255], to: [124, 77, 255], basic: 35 },
-};
-
-const RESET = "\x1b[0m";
-const truecolor = () =>
-  /truecolor|24bit/i.test(process.env.COLORTERM || "") ||
-  !!process.env.WT_SESSION ||
-  process.env.TERM_PROGRAM === "vscode" ||
-  process.env.TERM_PROGRAM === "iTerm.app";
-
-const lerp = (a, b, t) => Math.round(a + (b - a) * t);
-const to256 = ([r, g, b]) =>
-  16 + 36 * Math.round(r / 51) + 6 * Math.round(g / 51) + Math.round(b / 51);
-
-function mascotLines(tc) {
-  const fg = (c) =>
-    tc ? `\x1b[38;2;${c.join(";")}m` : `\x1b[38;5;${to256(c)}m`;
-  const bg = (c) =>
-    tc ? `\x1b[48;2;${c.join(";")}m` : `\x1b[48;5;${to256(c)}m`;
-  const lines = [];
-  for (let r = 0; r < MASCOT.length; r += 2) {
-    let s = "";
-    for (let c = 0; c < MASCOT[0].length; c++) {
-      const top = PALETTE[MASCOT[r][c]],
-        bot = PALETTE[MASCOT[r + 1][c]];
-      if (!top && !bot) s += " ";
-      else if (top && !bot) s += fg(top) + "▀" + RESET;
-      else if (!top && bot) s += fg(bot) + "▄" + RESET;
-      else s += fg(top) + bg(bot) + "▀" + RESET;
-    }
-    lines.push(s);
-  }
-  return lines;
+function enabled() {
+  if (printed) return false;
+  if (!process.stdout.isTTY || process.env.NO_COLOR || process.env.TERM === "dumb") return false;
+  if (process.env.FRIDAY_NO_BANNER === "1") return false;
+  const argv = process.argv.slice(2);
+  if (argv.includes("-p") || argv.includes("--prompt") || argv.includes("--print")) return false;
+  if (argv[0] === "update") return false;
+  return true;
 }
 
-function printBanner({ version = "", mode = "" } = {}) {
-  if (
-    !process.stdout.isTTY ||
-    process.env.NO_COLOR ||
-    process.env.FRIDAY_NO_BANNER
-  )
-    return;
+function version() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version || "";
+  } catch {
+    return "";
+  }
+}
 
-  const theme =
-    THEMES[(process.env.FRIDAY_THEME || "cyan").toLowerCase()] || THEMES.cyan;
+function render(opts) {
+  const o = opts && typeof opts === "object" ? opts : {};
+  const fg = (r, g, b) => (s) => `\x1b[38;2;${r};${g};${b}m${s}\x1b[0m`;
+  const orange = fg(255, 148, 40);
+  const muted = fg(140, 132, 124);
+  const faint = fg(88, 82, 76);
   const cols = process.stdout.columns || 80;
-  const dim = "\x1b[90m",
-    bold = "\x1b[1m";
-  const tc = truecolor();
-  const letter = (i) => {
-    if (!tc) return `\x1b[${theme.basic}m`;
-    const t = i / (LOGO.length - 1);
-    const [r, g, b] = theme.from.map((v, k) => lerp(v, theme.to[k], t));
-    return `\x1b[38;2;${r};${g};${b}m`;
-  };
-  const accent = tc
-    ? `\x1b[38;2;${theme.from.join(";")}m`
-    : `\x1b[${theme.basic}m`;
 
-  const cwd = path.normalize(process.cwd().replace(os.homedir(), "~"));
-  const tagline = dim + TAGLINE + RESET;
-  const meta =
-    accent +
-    "v" +
-    version +
-    RESET +
-    dim +
-    (mode ? "  ·  " + mode : "") +
-    "  ·  " +
-    cwd +
-    RESET;
+  const mode = String(o.mode || process.argv[2] || "").replace(/^-.*/, "") || "browser";
+  const label = { chat: "terminal chat", agent: "coding agent", browser: "web app", setup: "setup" }[mode] || mode;
+  const v = o.version || version();
+  let where = process.cwd();
+  const home = os.homedir();
+  if (where.toLowerCase().startsWith(home.toLowerCase())) where = "~" + where.slice(home.length);
 
-  const mascotW = MASCOT[0].length;
-  const wantMascot = process.env.FRIDAY_MASCOT !== "0";
-  const out = [""];
-
-  if (wantMascot && cols >= 2 + mascotW + 2 + LOGO[0].length) {
-    // avatar on the left, letters + tagline on the right
-    const mascot = mascotLines(tc);
-    const right = [
-      ...LOGO.map((l, i) => letter(i) + l + RESET),
-      "",
-      tagline,
-      meta,
-    ];
-    const offset = Math.max(0, right.length - mascot.length); // sit the avatar on the "ground"
-    right.forEach((line, i) => {
-      const m = mascot[i - offset];
-      out.push(
-        "  " + (m !== undefined ? m : " ".repeat(mascotW)) + "  " + line,
-      );
-    });
-  } else if (
-    wantMascot &&
-    cols >= LOGO[0].length + 4 &&
-    (process.stdout.rows || 24) >= 24
-  ) {
-    // not wide enough for side-by-side: avatar stacked above the letters
-    mascotLines(tc).forEach((m) => out.push("  " + m));
-    LOGO.forEach((l, i) => out.push("  " + letter(i) + l + RESET));
-    out.push("", "  " + tagline, "  " + meta);
-  } else if (!wantMascot && cols >= LOGO[0].length + 4) {
-    LOGO.forEach((l, i) => out.push("  " + letter(i) + l + RESET));
-    out.push("", "  " + tagline, "  " + meta);
+  const lines = [""];
+  if (cols >= 50) {
+    LOGO.forEach((row, i) => lines.push("  " + fg(...SHADES[i])(row)));
+    lines.push("");
+    lines.push("  " + muted("Fast Retrieval, Intelligent Dialogue & Autonomous Yield"));
   } else {
-    out.push(
-      "  " + bold + accent + "F R I D A Y" + RESET,
-      "",
-      "  " + tagline,
-      "  " + meta,
-    );
+    lines.push("  " + `\x1b[48;2;255;148;40m\x1b[38;2;20;14;8m FRIDAY \x1b[0m`);
   }
-  out.push("");
-  console.log(out.join("\n"));
+  const info = [v ? orange("v" + v) : null, muted(label), faint(where)].filter(Boolean).join(faint("  ·  "));
+  lines.push("  " + info);
+  lines.push("");
+  return lines.join("\n");
 }
 
-module.exports = { printBanner };
+function show(opts) {
+  if (!enabled()) return "";
+  printed = true;
+  process.stdout.write(render(opts) + "\n");
+  return "";
+}
+
+// Any property the launcher asks for (print, printBanner, showBanner, hud, ...) is the same
+// printer, so this file drops in without knowing the launcher's exact call.
+const callable = (fn) =>
+  new Proxy(fn, {
+    get(target, prop) {
+      if (prop === "render" || prop === "renderBanner" || prop === "text") return (o) => (enabled() ? render(o) : "");
+      if (prop === "default" || prop === "__esModule") return prop === "__esModule" ? false : show;
+      if (prop in target) return target[prop];
+      if (typeof prop === "symbol") return undefined;
+      return show;
+    },
+  });
+
+module.exports = callable(show);
+
+if (require.main === module) show();

@@ -23,7 +23,7 @@ from friday_agent.engine import (
 from friday_agent import session_store
 from friday_agent.insights import build_report
 from friday_agent.mcp_client import MCPManager
-from friday_agent.llm import LLMError, list_models, resolve_model
+from friday_agent.llm import LLMError, _same_model, list_models, resolve_model
 from friday_agent.tools import register_external_tools
 from friday_agent.voice import listen
 
@@ -101,7 +101,8 @@ class TurnRequest(BaseModel):
 
 
 class ModeRequest(BaseModel):
-    mode: str = Field(min_length=1, max_length=32)
+    mode: str | None = Field(default=None, min_length=1, max_length=32)
+    model: str | None = Field(default=None, min_length=1, max_length=120, pattern=r"^[A-Za-z0-9_.:/@-]+$")
 
 
 class ApprovalRequest(BaseModel):
@@ -348,8 +349,21 @@ async def update_agent_session(session_id: str, body: ModeRequest) -> dict:
     session = _session_or_404(session_id)
     if session.busy:
         raise HTTPException(status_code=409, detail="Wait for the current turn to finish before changing modes.")
-    _check_mode_allowed(body.mode)
-    session.permissions.mode = body.mode
+    if body.mode is None and body.model is None:
+        raise HTTPException(status_code=422, detail="Send a mode or a model to change.")
+    if body.model is not None:
+        try:
+            installed = await list_models()
+        except Exception:  # Ollama offline: cannot confirm the model exists
+            installed = []
+        match = next((name for name in installed if _same_model(name, body.model)), None)
+        if match is None:
+            available = ", ".join(installed) or "none (is Ollama running?)"
+            raise HTTPException(status_code=422, detail=f"Model '{body.model}' is not installed. Installed: {available}")
+        session.model = match
+    if body.mode is not None:
+        _check_mode_allowed(body.mode)
+        session.permissions.mode = body.mode
     session.save()
     return _session_payload(session)
 

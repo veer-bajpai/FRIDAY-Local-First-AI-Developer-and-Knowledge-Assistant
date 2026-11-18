@@ -80,3 +80,56 @@ def test_resume_loads_a_saved_session_that_is_not_in_memory(tmp_path: Path, monk
         resumed = client.post("/api/agent/sessions", json={"resume_id": sid})
         assert resumed.status_code == 200 and resumed.json()["id"] == sid
         assert client.post("/api/agent/sessions", json={"resume_id": "doesnotexist"}).status_code == 404
+
+
+def test_agent_session_model_can_be_switched_to_an_installed_model(tmp_path: Path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from backend.app import agent_routes
+
+    async def installed():
+        return ["llama3.2:latest", "qwen2.5-coder:7b"]
+
+    monkeypatch.setattr(agent_routes, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(agent_routes, "SESSIONS", {})
+    monkeypatch.setattr(agent_routes, "list_models", installed)
+    app = FastAPI()
+    app.include_router(agent_routes.router)
+    with TestClient(app) as client:
+        sid = client.post("/api/agent/sessions", json={"model": "llama3.2:latest"}).json()["id"]
+        switched = client.patch(f"/api/agent/sessions/{sid}", json={"model": "qwen2.5-coder:7b"})
+        assert switched.status_code == 200 and switched.json()["model"] == "qwen2.5-coder:7b"
+        assert agent_routes.SESSIONS[sid].model == "qwen2.5-coder:7b"
+        assert client.patch(f"/api/agent/sessions/{sid}", json={"model": "llama3.2"}).json()["model"] == "llama3.2:latest"
+        missing = client.patch(f"/api/agent/sessions/{sid}", json={"model": "gpt-4"})
+        assert missing.status_code == 422 and "not installed" in missing.json()["detail"]
+        assert client.patch(f"/api/agent/sessions/{sid}", json={"mode": "plan"}).json()["mode"] == "plan"
+        assert client.patch(f"/api/agent/sessions/{sid}", json={}).status_code == 422
+
+
+def test_terminal_model_command_lists_and_switches(monkeypatch):
+    import asyncio
+
+    from friday_agent.terminal import FridayAgentApp
+
+    app = FridayAgentApp(api="http://127.0.0.1:9")
+    app.session_id = "abc123"
+    app.model = "llama3.2:latest"
+    calls, lines = [], []
+
+    async def fake_json(method, url, body=None):
+        calls.append((method, url, body))
+        if method == "GET":
+            return {"models": ["qwen2.5-coder:7b", "llama3.2:latest"]}
+        return {"model": body["model"]}
+
+    monkeypatch.setattr(app, "_json", fake_json)
+    monkeypatch.setattr(app, "_write_system", lines.append)
+    monkeypatch.setattr(app, "_render_hud", lambda: None)
+    monkeypatch.setattr(app, "_render_side", lambda: None)
+    asyncio.run(app._switch_model(""))
+    assert any("● " in line and "llama3.2:latest" in line for line in lines)
+    asyncio.run(app._switch_model("2"))
+    assert calls[-1][0] == "PATCH" and calls[-1][2] == {"model": "qwen2.5-coder:7b"}
+    assert app.model == "qwen2.5-coder:7b"
