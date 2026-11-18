@@ -1,0 +1,7 @@
+# Optional: OCR for images and scanned PDFs. Also install the Tesseract program:
+#   Windows: winget install UB-Mannheim.TesseractOCR   (then reopen the terminal)
+#   macOS:   brew install tesseract      Linux: sudo apt install tesseract-ocr
+pytesseract>=0.3.13
+pypdfium2>=4.30
+Pillow>=10.0
+openpyxl>=3.1

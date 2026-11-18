@@ -1,0 +1,160 @@
+@import "tailwindcss";
+
+/* ============================================================
+   FRIDAY design tokens · light (default) and dark
+   ============================================================ */
+:root,
+[data-theme="light"] {
+  --bg: #f4f5f8;
+  --surface: #ffffff;
+  --surface-2: #f8f9fc;
+  --sunken: #f1f2f6;
+  --hover: #f3f4f8;
+  --line: #eceef3;
+  --line-strong: #e0e3ea;
+  --text: #1b1d26;
+  --text-2: #464b5b;
+  --muted: #747a8b;
+  --faint: #9aa0b0;
+  --accent: #5b5bf6;
+  --accent-2: #8b6cf6;
+  --accent-soft: #eef0ff;
+  --accent-text: #4747e0;
+  --accent-ring: rgba(91, 91, 246, 0.16);
+  --ink: #111216;
+  --ink-contrast: #ffffff;
+  --success: #15845a;
+  --success-soft: #e6f6ee;
+  --warning: #a2660c;
+  --warning-soft: #fdf2de;
+  --danger: #cc3f35;
+  --danger-soft: #ffeceb;
+  --info: #2d6bd3;
+  --info-soft: #e8f1ff;
+  --memo: #fbf6ea;
+  --memo-text: #6b5323;
+  --c1: #5b5bf6;
+  --c2: #1fb39d;
+  --c3: #f2a33a;
+  --c4: #e5607a;
+  --c5: #8b6cf6;
+  --shadow-sm: 0 1px 2px rgba(20, 22, 40, 0.05);
+  --shadow-md: 0 1px 2px rgba(20, 22, 40, 0.04), 0 8px 24px rgba(20, 22, 40, 0.06);
+  --shadow-lg: 0 24px 60px rgba(20, 22, 40, 0.16);
+  --code-bg: #f6f7fb;
+  --scrim: rgba(17, 18, 22, 0.32);
+
+  /* legacy names used by the agent panel and thinking styles */
+  --background: var(--bg);
+  --foreground: var(--text);
+  --panel: var(--surface);
+  --panel-strong: var(--surface-2);
+  --accent-strong: var(--accent);
+  --radius: 12px;
+}
+
+[data-theme="dark"] {
+  --bg: #0c0d11;
+  --surface: #14151b;
+  --surface-2: #191a21;
+  --sunken: #1d1e26;
+  --hover: #1e2029;
+  --line: #22242d;
+  --line-strong: #2d303b;
+  --text: #ecedf3;
+  --text-2: #b9bccb;
+  --muted: #8a8ea2;
+  --faint: #666a7d;
+  --accent: #7c7cff;
+  --accent-2: #a184ff;
+  --accent-soft: rgba(124, 124, 255, 0.13);
+  --accent-text: #a8a8ff;
+  --accent-ring: rgba(124, 124, 255, 0.22);
+  --ink: #f2f2f6;
+  --ink-contrast: #111216;
+  --success: #3fcf8e;
+  --success-soft: rgba(63, 207, 142, 0.12);
+  --warning: #f0b44c;
+  --warning-soft: rgba(240, 180, 76, 0.12);
+  --danger: #ff7b72;
+  --danger-soft: rgba(255, 123, 114, 0.12);
+  --info: #6fa8ff;
+  --info-soft: rgba(111, 168, 255, 0.12);
+  --memo: rgba(240, 180, 76, 0.09);
+  --memo-text: #e7c98c;
+  --c1: #7c7cff;
+  --c2: #2fd0b4;
+  --c3: #f2a33a;
+  --c4: #f0718a;
+  --c5: #b28cff;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.35), 0 10px 30px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 30px 80px rgba(0, 0, 0, 0.55);
+  --code-bg: #101116;
+  --scrim: rgba(0, 0, 0, 0.55);
+}
+
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--text);
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-code);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-inter), Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--accent-ring);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

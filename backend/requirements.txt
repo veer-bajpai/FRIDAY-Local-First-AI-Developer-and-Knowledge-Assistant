@@ -1,0 +1,12 @@
+# Core runtime dependencies for the Friday FastAPI backend.
+# Install with: pip install -r backend/requirements.txt
+
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+httpx==0.28.1
+rich>=14.2,<16
+pydantic==2.10.5
+pypdf==5.1.0
+numpy>=1.26
+textual>=8.2.8,<9
