@@ -65,10 +65,37 @@ def is_supported(file_type: str) -> bool:
 
 # ------------------------------------------------------------------ capabilities
 
+WINDOWS_TESSERACT = (
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+)
+
+
+def _tesseract_command() -> str | None:
+    """Tesseract program to use: FRIDAY_TESSERACT_CMD, then PATH, then the usual Windows install folders."""
+    import shutil
+
+    configured = os.getenv("FRIDAY_TESSERACT_CMD", "").strip().strip('"')
+    if configured and Path(configured).is_file():
+        return configured
+    found = shutil.which("tesseract")
+    if found:
+        return found
+    candidates = list(WINDOWS_TESSERACT)
+    local = os.getenv("LOCALAPPDATA")
+    if local:
+        candidates.append(str(Path(local) / "Programs" / "Tesseract-OCR" / "tesseract.exe"))
+    return next((c for c in candidates if Path(c).is_file()), None)
+
+
 def ocr_available() -> bool:
     try:
         import pytesseract
 
+        command = _tesseract_command()
+        if command is None:
+            return False
+        pytesseract.pytesseract.tesseract_cmd = command
         pytesseract.get_tesseract_version()
         return True
     except Exception:

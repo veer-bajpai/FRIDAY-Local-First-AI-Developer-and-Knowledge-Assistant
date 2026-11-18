@@ -6,3 +6,10 @@ node_modules/
 .env
 .env.*
 !.env.example
+
+.next/
+node_modules/
+.venv/
+data/
+__pycache__/
+next-env.d.ts

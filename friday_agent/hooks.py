@@ -1,34 +1,74 @@
-﻿"""Default FRIDAY tool hooks.
+"""Configurable, bounded hooks for agent tool execution."""
+from __future__ import annotations
 
-The current project configuration has no custom hooks.
-This module provides the interface expected by friday_agent.engine.
-"""
-
-from collections.abc import Mapping
+import json
+import os
+import shlex
+import subprocess
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, overload
 
 
 class Hooks:
+    SUPPORTED_EVENTS = {"PreToolUse", "PostToolUse"}
+
     def __init__(
         self,
         config: Mapping[str, Any] | None = None,
         workspace: str | Path | None = None,
     ) -> None:
         self.workspace = Path(workspace).resolve() if workspace is not None else None
-
         if config is None:
             config = {}
-
         if not isinstance(config, Mapping):
             raise TypeError("Hooks configuration must be a mapping.")
+        unknown = set(config) - self.SUPPORTED_EVENTS
+        if unknown:
+            raise ValueError(f"Unsupported FRIDAY hook event(s): {', '.join(sorted(unknown))}")
+        self.config: dict[str, list[dict[str, Any]]] = {}
+        for event in self.SUPPORTED_EVENTS:
+            entries = config.get(event, [])
+            if entries is None:
+                entries = []
+            if isinstance(entries, Mapping):
+                entries = [entries]
+            if not isinstance(entries, Sequence) or isinstance(entries, (str, bytes)):
+                raise TypeError(f"{event} hooks must be a mapping or a list.")
+            normalized = []
+            for entry in entries:
+                if not isinstance(entry, Mapping):
+                    raise TypeError(f"{event} hook entries must be mappings.")
+                normalized.append(dict(entry))
+            self.config[event] = normalized
 
-        if config:
-            raise ValueError(
-                "Custom hooks are not implemented in this FRIDAY version. "
-                "Remove the unsupported hooks configuration rather than "
-                "silently ignoring it."
-            )
+    def _matches(self, entry: Mapping[str, Any], tool: str) -> bool:
+        matcher = entry.get("tool")
+        if matcher is None:
+            return True
+        if isinstance(matcher, str):
+            return matcher == tool
+        if isinstance(matcher, Sequence) and not isinstance(matcher, (str, bytes)):
+            return tool in matcher
+        raise TypeError("Hook 'tool' must be a string or list of strings.")
+
+    @overload
+    def run(
+        self,
+        event: Literal["PreToolUse"],
+        tool: str,
+        arguments: dict[str, Any],
+        result: Any = None,
+    ) -> tuple[bool, str]: ...
+
+    @overload
+    def run(
+        self,
+        event: Literal["PostToolUse"],
+        tool: str,
+        arguments: dict[str, Any],
+        result: Any = None,
+    ) -> None: ...
 
     def run(
         self,
@@ -37,15 +77,45 @@ class Hooks:
         arguments: dict[str, Any],
         result: Any = None,
     ) -> tuple[bool, str] | None:
-        """Handle the hook events currently called by the agent engine."""
-
-        if event == "PreToolUse":
-            # No custom pre-tool hooks are configured.
-            # The separate Permissions system still controls tool access.
-            return True, ""
-
-        if event == "PostToolUse":
-            # No custom post-tool hooks are configured.
-            return None
-
-        raise ValueError(f"Unsupported FRIDAY hook event: {event}")
+        if event not in self.SUPPORTED_EVENTS:
+            raise ValueError(f"Unsupported FRIDAY hook event: {event}")
+        for entry in self.config[event]:
+            if not self._matches(entry, tool):
+                continue
+            command = entry.get("command")
+            if not isinstance(command, str) or not command.strip():
+                raise ValueError(f"{event} hook for '{tool}' requires a non-empty command.")
+            try:
+                argv = shlex.split(command, posix=os.name != "nt")
+            except ValueError as exc:
+                return (False, f"Invalid hook command: {exc}") if event == "PreToolUse" else None
+            if not argv:
+                return (False, "Invalid empty hook command.") if event == "PreToolUse" else None
+            payload = json.dumps({"event": event, "tool": tool, "arguments": arguments, "result": result})
+            env = os.environ.copy()
+            env["FRIDAY_HOOK_EVENT"] = event
+            env["FRIDAY_HOOK_TOOL"] = tool
+            try:
+                completed = subprocess.run(
+                    argv,
+                    cwd=self.workspace,
+                    input=payload,
+                    text=True,
+                    capture_output=True,
+                    timeout=float(entry.get("timeout", 30)),
+                    env=env,
+                    shell=False,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                if event == "PreToolUse":
+                    return False, "PreToolUse hook timed out."
+                continue
+            except OSError as exc:
+                if event == "PreToolUse":
+                    return False, f"PreToolUse hook could not run: {exc}"
+                continue
+            if event == "PreToolUse" and completed.returncode != 0:
+                reason = completed.stderr.strip() or completed.stdout.strip() or f"exit code {completed.returncode}"
+                return False, reason
+        return (True, "") if event == "PreToolUse" else None
