@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import logging
 import os
@@ -9,7 +10,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
@@ -34,7 +35,7 @@ from . import knowledge
 from .extraction import ExtractionError, capabilities as extraction_capabilities, extract, is_supported
 from .observability import RequestLogMiddleware, configure_logging, request_id_var
 from .security import SecurityMiddleware
-from .agent_routes import router as agent_router
+from .agent_routes import router as agent_router, start_mcp_servers, stop_mcp_servers
 from .agent.router import router as coding_agent_router
 from friday_agent.config import (
     CHAT_MAX_TOKENS,
@@ -77,10 +78,18 @@ Answer directly. Do not include code, code blocks, or programming examples unles
 # APPLICATION
 # ============================================================
 
-app = FastAPI(
-    title="Friday API",
-    version="1.0.0"
-)
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    try:
+        await start_mcp_servers()
+        await startup()
+        yield
+    finally:
+        await stop_mcp_servers()
+        await shutdown()
+
+
+app = FastAPI(title="Friday API", version="1.0.0", lifespan=lifespan)
 app.include_router(agent_router)
 app.include_router(coding_agent_router)
 
@@ -377,7 +386,6 @@ def initialize() -> None:
         )
 
 
-@app.on_event("startup")
 async def startup() -> None:
     global ollama_client
     initialize()
@@ -394,7 +402,6 @@ async def startup() -> None:
     log.info("FRIDAY API started (data dir %s)", DATA_DIR.resolve())
 
 
-@app.on_event("shutdown")
 async def shutdown() -> None:
     global ollama_client
     if ollama_client is not None:
@@ -1737,7 +1744,7 @@ def save_exchange(conversation_id: str, question: str, answer: str) -> str:
 
 def load_conversation(request: "ChatRequest") -> tuple[str, bool, list[sqlite3.Row]]:
     created_conversation = request.conversation_id is None
-    conversation_id = request.conversation_id or create_conversation().get("id")
+    conversation_id = request.conversation_id or str(create_conversation()["id"])
     with db() as connection:
         conversation = connection.execute(
             "SELECT id FROM conversations WHERE id = ?", (conversation_id,)

@@ -147,7 +147,7 @@ export function timeAgo(iso?: string) {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
   if (seconds < 172800) return "Yesterday";
-  return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  return new Date(iso).toLocaleDateString("en-US", { day: "numeric", month: "short" });
 }
 
 export function clock(ms: number) {

@@ -76,7 +76,7 @@ export function Dashboard({
   const labels = series.map((_, index) => {
     const date = new Date();
     date.setDate(date.getDate() - (series.length - 1 - index));
-    return date.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    return date.toLocaleDateString("en-US", { day: "numeric", month: "short" });
   });
   const total = series.reduce((sum, value) => sum + value, 0);
   const half = Math.floor(series.length / 2);

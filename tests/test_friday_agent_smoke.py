@@ -48,3 +48,15 @@ def test_readonly_registry_excludes_write_tools():
     names = set(build_tools(read_only=True))
     assert "bash" not in names and "write_file" not in names and "task" not in names
     assert "read_file" in names and "grep" in names
+
+
+def test_git_tools_are_registered(tmp_path: Path):
+    ctx = Context(root=tmp_path.resolve())
+    tools = build_tools()
+    assert "git_status" in tools
+    assert "git_diff" in tools
+    assert "git_log" in tools
+    assert "git_add" in tools
+    assert "git_commit" in tools
+    assert tools["git_status"].read_only is True
+    assert tools["git_commit"].read_only is False

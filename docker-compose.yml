@@ -7,8 +7,8 @@ services:
       - ollama_models:/root/.ollama
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     environment:
       OLLAMA_URL: http://ollama:11434
       FRIDAY_DATA_DIR: /app/data

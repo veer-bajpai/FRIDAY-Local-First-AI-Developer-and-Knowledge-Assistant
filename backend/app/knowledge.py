@@ -167,7 +167,7 @@ class VectorIndex:
             if isinstance(vector, list) and vector:
                 parsed.append((chunk_id, document_id, vector))
                 dims[len(vector)] = dims.get(len(vector), 0) + 1
-        dimension = max(dims, key=dims.get) if dims else 0  # ignore vectors from an old embed model
+        dimension = max(dims, key=lambda size: dims[size]) if dims else 0  # ignore vectors from an old embed model
         parsed = [item for item in parsed if len(item[2]) == dimension]
         ids = [item[0] for item in parsed]
         documents = [item[1] for item in parsed]

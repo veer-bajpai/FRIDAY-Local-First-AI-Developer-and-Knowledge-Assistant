@@ -112,11 +112,8 @@ class RewindRequest(BaseModel):
     count: int = Field(default=1, ge=1, le=100)
 
 
-@router.on_event("startup")
 async def start_mcp_servers() -> None:
     global MCP_MANAGER, MCP_STATUS
-    # FastAPI 0.115 runs an included router's startup handlers twice (merged lifespan + copied
-    # handler). Without this guard MCP server processes were spawned twice.
     if MCP_MANAGER is not None:
         return
     _restore_sessions()
@@ -134,7 +131,6 @@ async def start_mcp_servers() -> None:
     MCP_MANAGER = manager
 
 
-@router.on_event("shutdown")
 async def stop_mcp_servers() -> None:
     global MCP_MANAGER
     if MCP_MANAGER is None:

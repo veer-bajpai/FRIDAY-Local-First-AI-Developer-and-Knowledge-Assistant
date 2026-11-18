@@ -443,7 +443,7 @@ export default function Home() {
     view === "Home" ? greeting() : view === "Chat" ? activeTitle : view;
   const subtitle =
     view === "Home"
-      ? `${new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" })} · ${online === false ? "Ollama is offline" : "everything runs on this device"}`
+      ? `${new Date().toLocaleDateString("en-US", { weekday: "long", day: "numeric", month: "short" })} · ${online === false ? "Ollama is offline" : "everything runs on this device"}`
       : view === "Chat"
         ? `${messages.filter((m) => m.role === "user").length} message${messages.filter((m) => m.role === "user").length === 1 ? "" : "s"} · answers cite your local files`
         : SUBTITLES[view];
