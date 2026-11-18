@@ -5,6 +5,7 @@ import json
 import os
 import shlex
 import subprocess
+from fnmatch import fnmatch
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal, overload
@@ -45,7 +46,11 @@ class Hooks:
     def _matches(self, entry: Mapping[str, Any], tool: str) -> bool:
         matcher = entry.get("tool")
         if matcher is None:
-            return True
+            # Older FRIDAY settings use a glob "matcher" (e.g. "bash" or "git_*").
+            pattern = entry.get("matcher", "*")
+            if not isinstance(pattern, str):
+                raise TypeError("Hook 'matcher' must be a string glob.")
+            return fnmatch(tool, pattern)
         if isinstance(matcher, str):
             return matcher == tool
         if isinstance(matcher, Sequence) and not isinstance(matcher, (str, bytes)):
@@ -85,13 +90,24 @@ class Hooks:
             command = entry.get("command")
             if not isinstance(command, str) or not command.strip():
                 raise ValueError(f"{event} hook for '{tool}' requires a non-empty command.")
+            argv: str | list[str]
+            if os.name == "nt":
+                # Windows parses the command line itself (CreateProcess); still no shell.
+                argv = command.strip()
+            else:
+                try:
+                    argv = shlex.split(command)
+                except ValueError as exc:
+                    return (False, f"Invalid hook command: {exc}") if event == "PreToolUse" else None
+                if not argv:
+                    return (False, "Invalid empty hook command.") if event == "PreToolUse" else None
             try:
-                argv = shlex.split(command, posix=os.name != "nt")
-            except ValueError as exc:
-                return (False, f"Invalid hook command: {exc}") if event == "PreToolUse" else None
-            if not argv:
-                return (False, "Invalid empty hook command.") if event == "PreToolUse" else None
-            payload = json.dumps({"event": event, "tool": tool, "arguments": arguments, "result": result})
+                timeout = min(max(float(entry.get("timeout", 30)), 1.0), 300.0)
+            except (TypeError, ValueError):
+                timeout = 30.0
+            # "args"/"output" kept alongside the new keys so older hook scripts keep working.
+            payload = json.dumps({"event": event, "tool": tool, "arguments": arguments, "result": result,
+                                  "args": arguments, "output": result}, default=str)
             env = os.environ.copy()
             env["FRIDAY_HOOK_EVENT"] = event
             env["FRIDAY_HOOK_TOOL"] = tool
@@ -102,7 +118,7 @@ class Hooks:
                     input=payload,
                     text=True,
                     capture_output=True,
-                    timeout=float(entry.get("timeout", 30)),
+                    timeout=timeout,
                     env=env,
                     shell=False,
                     check=False,

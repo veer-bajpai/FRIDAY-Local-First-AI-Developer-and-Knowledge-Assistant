@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 from typing import Any
 
@@ -105,13 +106,73 @@ async def git_commit(arguments: dict[str, Any], ctx: Context) -> str:
 
 
 async def git_branch(arguments: dict[str, Any], ctx: Context) -> str:
-    del arguments
-    return await _run_git(ctx, ["branch", "--show-current", "--list"])
+    name = str(arguments.get("name") or "").strip()
+    if not name:
+        return await _run_git(ctx, ["branch", "--list"])
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,79}", name) or ".." in name or name.endswith((".lock", "/")):
+        raise ToolError("Branch name contains unsupported characters.")
+    return await _run_git(ctx, ["switch", "-c", name])
 
 
 async def git_show(arguments: dict[str, Any], ctx: Context) -> str:
     revision = _revision(arguments.get("revision", "HEAD"))
     return await _run_git(ctx, ["show", "--stat", "--oneline", revision])
+
+
+async def _run_cmd(ctx: Context, *args: str, timeout: float = 300) -> str:
+    """Run git or gh with no shell; used by the PR, review and worktree tools."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args, cwd=ctx.root, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT, stdin=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout)
+        except asyncio.TimeoutError:
+            proc.kill()
+            raise ToolError(f"{args[0]} timed out after {int(timeout)}s.")
+    except FileNotFoundError as exc:
+        raise ToolError(f"{args[0]} is not installed or is not on PATH.") from exc
+    text = out.decode("utf-8", "replace").strip()
+    if proc.returncode:
+        raise ToolError(f"{' '.join(args[:3])} failed (exit {proc.returncode}):\n{text}")
+    return text or "(completed successfully)"
+
+
+async def create_pr(arguments: dict[str, Any], ctx: Context) -> str:
+    pushed = await _run_cmd(ctx, "git", "push", "-u", "origin", "HEAD")
+    created = await _run_cmd(ctx, "gh", "pr", "create", "--title", str(arguments["title"]),
+                             "--body", str(arguments["body"]))
+    return f"{pushed}\n{created}"
+
+
+async def git_review_diff(arguments: dict[str, Any], ctx: Context) -> str:
+    pr = arguments.get("pr")
+    if pr is not None:
+        if not str(pr).isdigit():
+            raise ToolError("PR number must be a positive integer.")
+        output = await _run_cmd(ctx, "gh", "pr", "diff", str(pr))
+    else:
+        output = await _run_git(ctx, ["diff", "HEAD"])
+    return output[:60_000] or "No diff to review."
+
+
+async def batch_worktrees(arguments: dict[str, Any], ctx: Context) -> str:
+    tasks = arguments.get("tasks", [])
+    if not isinstance(tasks, list) or not 1 <= len(tasks) <= 6:
+        raise ToolError("Provide between one and six independent task names.")
+    created = []
+    for task_name in tasks:
+        name = str(task_name).strip()
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+){0,5}", name):
+            raise ToolError(f"Invalid worktree task name: {name}")
+        worktree = ctx.root.parent / f"{ctx.root.name}-wt-{name}"
+        if worktree.exists():
+            raise ToolError(f"Worktree path already exists: {worktree}")
+        branch = f"friday/{name}"
+        result = await _run_git(ctx, ["worktree", "add", "-b", branch, str(worktree)])
+        created.append(f"{branch} ({worktree}): {result}")
+    return "Worktrees ready for their independent tasks:\n" + "\n".join(created)
 
 
 def _obj(properties: dict[str, dict[str, Any]], required: list[str] | None = None) -> dict[str, Any]:
@@ -126,8 +187,14 @@ def git_tools() -> list[Tool]:
         Tool("git_status", "Show the current Git branch and working-tree status.", _obj({"short": boolean}), git_status, True),
         Tool("git_diff", "Show unstaged or staged changes.", _obj({"staged": boolean, "base": string, "path": string}), git_diff, True),
         Tool("git_log", "Show recent commits.", _obj({"limit": integer}), git_log, True),
-        Tool("git_branch", "Show the current and available local branches.", _obj({}), git_branch, True),
+        Tool("git_branch", "List local branches, or create and switch to a new branch when 'name' is given.", _obj({"name": string}), git_branch, False),
         Tool("git_show", "Show a commit summary.", _obj({"revision": string}), git_show, True),
         Tool("git_add", "Stage files for commit. Paths must remain inside the workspace.", _obj({"paths": {"type": "array", "items": string}}, ["paths"]), git_add, False),
         Tool("git_commit", "Create a Git commit with an explicit message.", _obj({"message": string}, ["message"]), git_commit, False),
+        Tool("create_pr", "Push the current branch and open a pull request with GitHub CLI.",
+             _obj({"title": string, "body": string}, ["title", "body"]), create_pr, False, network=True),
+        Tool("git_review_diff", "Return the working diff or a GitHub pull request diff for review.",
+             _obj({"pr": integer}), git_review_diff, True, network=True),
+        Tool("batch_worktrees", "Create isolated branches/worktrees for up to six independent coding tasks.",
+             _obj({"tasks": {"type": "array", "items": string}}, ["tasks"]), batch_worktrees, False),
     ]

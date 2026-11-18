@@ -1,7 +1,14 @@
 """Shared test isolation: never let tests read or write the real FRIDAY data directory."""
 from __future__ import annotations
 
+import os
+import tempfile
+
 import pytest
+
+# Set before any backend module is imported, so module-level paths (DB, token, sessions)
+# point at a throwaway folder instead of the project's real ./data.
+os.environ["FRIDAY_DATA_DIR"] = tempfile.mkdtemp(prefix="friday-test-data-")
 
 
 @pytest.fixture(autouse=True)

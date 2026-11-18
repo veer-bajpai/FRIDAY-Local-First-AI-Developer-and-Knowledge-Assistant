@@ -30,6 +30,7 @@ The command denylist is not a sandbox: run untrusted repositories in Docker.
 | `FRIDAY_EMBED_MODEL` | `nomic-embed-text:latest` | Embedding model |
 | `FRIDAY_FALLBACK_MODELS` | `qwen2.5-coder:7b,llama3.2:latest,llama3.1:8b,qwen3:8b` | Tried in order when the configured model is not installed |
 | `FRIDAY_VISION_MODEL` | *(unset)* | Ollama vision model for images, e.g. `llava:7b`, `qwen2.5vl:7b` |
+| `FRIDAY_TESSERACT_CMD` | *(auto)* | Full path to `tesseract.exe`. Normally not needed: FRIDAY checks PATH, then `C:\Program Files\Tesseract-OCR` |
 | `FRIDAY_MAX_TOKENS` | `2048` | Chat reply length limit (`-1` = model default) |
 | `FRIDAY_OLLAMA_TIMEOUT` | `300` | Seconds to wait between streamed chunks (model loading) |
 | `FRIDAY_NUM_CTX` | `8192` | Context window passed to Ollama |

@@ -122,6 +122,20 @@ def restore(data: dict[str, Any]) -> AgentSession:
     return session
 
 
+def load_one(session_id: str, directory: Path) -> AgentSession | None:
+    """Load a single saved session by id, or None if it is missing or unreadable."""
+    if not session_id.isalnum():
+        return None
+    file = directory / f"{session_id}.json"
+    try:
+        data = json.loads(file.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and data.get("id") == session_id:
+            return restore(data)
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError, RuntimeError):
+        pass
+    return None
+
+
 def load_all(directory: Path) -> list[AgentSession]:
     sessions: list[AgentSession] = []
     if not directory.is_dir():

@@ -1905,3 +1905,10 @@ svg.rot {
 .agent-shell .agent-heading {
   display: none;
 }
+
+/* Tailwind's preflight strips list bullets and button layout; restore them where FRIDAY renders markdown. */
+.answer ul { list-style: disc; }
+.answer ol { list-style: decimal; }
+.answer li::marker { color: var(--muted); }
+.side-label button { display: inline-flex; align-items: center; gap: 3px; }
+.answer img { max-width: 100%; border-radius: 10px; }

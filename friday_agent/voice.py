@@ -1,26 +1,28 @@
-"""Optional local voice input integration."""
+"""Optional local microphone capture and speech-to-text."""
 from __future__ import annotations
 
+from functools import lru_cache
 
-def listen(timeout: float = 5.0, phrase_timeout: float = 8.0) -> str:
+
+@lru_cache(maxsize=1)
+def _model():
+    from faster_whisper import WhisperModel
+
+    return WhisperModel("base", compute_type="int8")
+
+
+def listen(seconds: int = 8) -> str:
     try:
-        import speech_recognition as sr
+        import sounddevice as sd
+        import numpy as np
+        from faster_whisper import WhisperModel  # noqa: F401
     except ImportError as exc:
         raise RuntimeError(
-            "Voice input is unavailable. Install the optional voice dependencies."
+            "Voice input is optional. Install backend/requirements-agent-optional.txt to enable it."
         ) from exc
-
-    recognizer = sr.Recognizer()
-    try:
-        with sr.Microphone() as source:
-            recognizer.adjust_for_ambient_noise(source, duration=min(timeout, 3.0))
-            audio = recognizer.listen(source, timeout=timeout, phrase_time_limit=phrase_timeout)
-        return recognizer.recognize_google(audio).strip()
-    except sr.WaitTimeoutError as exc:
-        raise RuntimeError("No speech was detected before the timeout.") from exc
-    except sr.UnknownValueError as exc:
-        raise RuntimeError("Speech was not understood.") from exc
-    except sr.RequestError as exc:
-        raise RuntimeError(f"Speech recognition service request failed: {exc}") from exc
-    except OSError as exc:
-        raise RuntimeError(f"Could not access the microphone: {exc}") from exc
+    if not 1 <= seconds <= 30:
+        raise ValueError("Recording duration must be between 1 and 30 seconds.")
+    audio = sd.rec(int(seconds * 16_000), samplerate=16_000, channels=1, dtype="float32")
+    sd.wait()
+    segments, _ = _model().transcribe(np.asarray(audio).reshape(-1))
+    return " ".join(segment.text.strip() for segment in segments).strip()

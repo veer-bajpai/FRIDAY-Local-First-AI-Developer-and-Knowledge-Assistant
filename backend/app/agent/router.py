@@ -1,36 +1,36 @@
-"""Compatibility routes for the legacy approval-gated agent stream."""
+"""Local-only API routes for streaming coding-agent sessions and approvals."""
 from __future__ import annotations
 
 import json
+import uuid
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from ..agent_routes import require_local_agent_request
 from .loop import resolve_approval, run_agent
 
+router = APIRouter(
+    prefix="/api/agent",
+    tags=["coding-agent"],
+    dependencies=[Depends(require_local_agent_request)],
+)
 
-router = APIRouter()
 
-
-class LegacyAgentRequest(BaseModel):
-    task: str = Field(min_length=1, max_length=4000)
+class AgentRequest(BaseModel):
+    task: str = Field(min_length=1, max_length=8000)
     project_root: str = Field(min_length=1, max_length=2048)
     model: str = Field(default="", max_length=120)
+    session_id: str = Field(default_factory=lambda: uuid.uuid4().hex, min_length=1, max_length=128)
+
+
+class ApprovalRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=128)
-
-
-class LegacyApprovalRequest(BaseModel):
+    approval_id: str = Field(min_length=1, max_length=128)
     decision: Literal["allow_once", "allow_always", "deny"]
-
-
-def _require_local(request: Request) -> None:
-    from ..security import is_trusted_client, presented_token, token_valid
-
-    if not (is_trusted_client(request.client.host if request.client else "") or token_valid(presented_token(request))):
-        raise HTTPException(status_code=403, detail="Agent access is restricted to this machine.")
 
 
 def _validate_project_root(raw: str) -> Path:
@@ -45,22 +45,30 @@ def _validate_project_root(raw: str) -> Path:
     return root
 
 
-@router.post("/api/agent/stream")
-async def legacy_agent_stream(body: LegacyAgentRequest, _: None = Depends(_require_local)):
-    root = _validate_project_root(body.project_root)
+@router.post("/stream")
+async def stream_agent(request: AgentRequest) -> StreamingResponse:
+    root = _validate_project_root(request.project_root)
 
     async def events():
-        async for event in run_agent(body.task, str(root), body.model, body.session_id):
-            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        start = {"type": "session", "session_id": request.session_id}
+        yield f"data: {json.dumps(start, ensure_ascii=False)}\n\n"
+        async for event in run_agent(
+            request.task,
+            str(root),
+            request.model,
+            request.session_id,
+        ):
+            yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
 
-    return StreamingResponse(events(), media_type="text/event-stream")
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
-@router.post("/api/agent/stream/approve/{session_id}/{approval_id}")
-async def legacy_agent_approval(
-    session_id: str,
-    approval_id: str,
-    body: LegacyApprovalRequest,
-    _: None = Depends(_require_local),
-) -> dict[str, bool]:
-    return {"resolved": resolve_approval(session_id, approval_id, body.decision)}
+@router.post("/approve")
+async def approve_agent_action(request: ApprovalRequest) -> dict[str, bool]:
+    if not resolve_approval(request.session_id, request.approval_id, request.decision):
+        raise HTTPException(status_code=404, detail="No pending approval with that id.")
+    return {"ok": True}

@@ -282,6 +282,11 @@ async def create_agent_session(body: CreateSessionRequest) -> dict:
     if body.resume_id:
         existing = SESSIONS.get(body.resume_id)
         if existing is None:
+            # Not in memory (evicted, or the app started without the startup hook): try disk.
+            loaded = session_store.load_one(body.resume_id, _store_dir())
+            if loaded is not None and len(SESSIONS) < MAX_SESSIONS:
+                existing = _attach(loaded)
+        if existing is None:
             raise HTTPException(status_code=404, detail="That agent session no longer exists.")
         return _session_payload(existing)
     available = [session_id for session_id, session in SESSIONS.items() if not session.busy]

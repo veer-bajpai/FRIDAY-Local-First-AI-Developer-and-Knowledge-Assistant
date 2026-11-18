@@ -14,21 +14,14 @@ async def chat(
 ) -> dict[str, Any]:
     content: list[str] = []
     tool_calls: list[dict[str, Any]] = []
-    usage: dict[str, int] = {}
     async for chunk in chat_stream(model or DEFAULT_MODEL, messages, tools=tools):
         message = chunk.get("message") or {}
         if message.get("content"):
             content.append(str(message["content"]))
         if message.get("tool_calls"):
             tool_calls.extend(message["tool_calls"])
-        if chunk.get("done"):
-            usage = {
-                "prompt_eval_count": int(chunk.get("prompt_eval_count", 0) or 0),
-                "eval_count": int(chunk.get("eval_count", 0) or 0),
-            }
     return {
         "role": "assistant",
         "content": "".join(content),
         "tool_calls": tool_calls,
-        "_usage": usage,
     }

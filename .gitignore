@@ -13,3 +13,8 @@ node_modules/
 data/
 __pycache__/
 next-env.d.ts
+.friday-local-runtime-data-*/
+tsconfig.tsbuildinfo
+__pycache__/
+*.pyc
+data/*.db
