@@ -1,6 +1,6 @@
 {
   "name": "friday-app",
-  "version": "0.1.0",
+  "version": "10.0.0",
   "private": true,
   "bin": {
     "friday": "bin/friday.js"

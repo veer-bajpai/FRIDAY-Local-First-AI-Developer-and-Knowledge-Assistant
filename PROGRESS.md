@@ -1,5 +1,15 @@
 # FRIDAY Progress
 
+## FRIDAY v10.00 (20 Nov 2026)
+
+Consolidated release built from the working copy, `FRIDAY_v4.00` and the `FRIDAY_Browser_UI_update` package.
+
+- Version set to 10.0.0 (`package.json`, `friday_agent.__version__`, FastAPI app version).
+- Keeps the newest code in every file: the Friday Code terminal (`terminal.py` with `scene.py` and the Patch mascot), prompt-based tool routing (`routing.py`), diagnostics (`diagnostics.py`), model warm-up, the `/api/agent/sessions/{id}/cancel` endpoint, and persisted `tool_routing` per session.
+- Browser UI (Bento dashboard, light/dark themes, `src/app/ui/`) unchanged; the update package's `src/` was identical to it.
+- From v4.00: removed the stale `src/app/workspace.css`, `src/app/thinking/ThinkingExample.tsx` and its now-unused `src/app/thinking/useThinkingTimer.ts`; dropped the runtime file `data/agent_sessions.json` (created on first run).
+- Not taken from the update package: its older "operator console" terminal and engine without routing, warm-up or cancel, which would have removed those features.
+
 ## Audit and hardening pass (Nov 2026)
 
 The terminal console (`friday_agent/terminal.py`) was kept byte-for-byte unchanged.

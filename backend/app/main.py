@@ -89,7 +89,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await shutdown()
 
 
-app = FastAPI(title="Friday API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Friday API", version="10.0.0", lifespan=lifespan)
 app.include_router(agent_router)
 app.include_router(coding_agent_router)
 
