@@ -136,3 +136,4 @@ case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *) echo "If 'friday' is not found, add to your shell profile: export PATH=\"$BIN_DIR:\$PATH\"" ;;
 esac
+

@@ -2,18 +2,21 @@ services:
   ollama:
     image: ollama/ollama:latest
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     volumes:
       - ollama_models:/root/.ollama
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     environment:
       OLLAMA_URL: http://ollama:11434
       FRIDAY_DATA_DIR: /app/data
+      # Published on 127.0.0.1 only; host traffic arrives from the Docker bridge.
+      FRIDAY_TRUSTED_NETWORKS: 172.16.0.0/12
+      FRIDAY_ALLOWED_HOSTS: localhost,127.0.0.1,backend
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./data:/app/data
     depends_on:
@@ -23,8 +26,9 @@ services:
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:8000
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       - backend
 volumes:
   ollama_models:
+

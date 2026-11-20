@@ -17,7 +17,7 @@ const dim = (s) => paint256(240, s),
 const red = (s) => paint256(131, s),
   yellow = (s) => paint256(179, s),
   bold = (s) => paint(1, s);
-const ASSISTANT_LABEL = "🌸 Friday ›";
+const ASSISTANT_LABEL = "FRIDAY >";
 
 const HELP = `
   ${bold("Commands")}
@@ -41,7 +41,7 @@ async function start({ api, args = [] }) {
   let controller = null;
   let lastExitCode = 0;
   const promptForStatus = (exitCode) => {
-    const core = paint256(exitCode === 0 ? 108 : 137, "🐺 BOSS");
+    const core = paint256(exitCode === 0 ? 108 : 137, "BOSS");
     return `${paint256(240, "⚙")} ${core} ${paint256(244, "❯")} `;
   };
 
@@ -240,7 +240,8 @@ async function start({ api, args = [] }) {
   } catch {
     lastExitCode = 1;
   }
-  console.log("\n" + dim(status));
+  console.log("\n" + bold(cyan("FRIDAY / CHAT WORKSTATION")));
+  console.log(dim(status));
   console.log(dim("  /help for commands · Ctrl+C to quit\n"));
 
   const rl = readline.createInterface({

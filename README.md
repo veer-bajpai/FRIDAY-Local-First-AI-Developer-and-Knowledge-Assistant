@@ -1,3 +1,7 @@
+> Operations, security, environment variables and the full API list: [docs/operations.md](docs/operations.md)
+>
+> The browser app opens on a dashboard with light/dark themes (follows your OS; toggle in the header or Settings). Shortcuts: Ctrl+K search, Ctrl+Shift+O new chat.
+
 ## Quick start
 
 Windows (PowerShell):
@@ -71,7 +75,7 @@ See [Architecture](docs/architecture.md) for the implemented service boundaries,
   <img src="https://img.shields.io/badge/React-TypeScript-blue?style=for-the-badge&logo=react" alt="React"/>
   <img src="https://img.shields.io/badge/FastAPI-Python-009688?style=for-the-badge&logo=fastapi" alt="FastAPI"/>
   <img src="https://img.shields.io/badge/Ollama-Local%20AI-white?style=for-the-badge" alt="Ollama"/>
-   <img src="https://img.shields.io/badge/RAG-Lexical%20Retrieval-purple?style=for-the-badge" alt="RAG"/>
+   <img src="https://img.shields.io/badge/RAG-Hybrid%20Retrieval-78a99a?style=for-the-badge" alt="RAG"/>
   <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="MIT License"/>
 </p>
 
@@ -79,7 +83,7 @@ See [Architecture](docs/architecture.md) for the implemented service boundaries,
 
 ## 🧠 What is Friday?
 
-**Friday** is a local-first personal AI workspace designed to combine conversational AI with document intelligence and lexical retrieval.
+**Friday** is a local-first personal AI workspace designed to combine conversational AI with document intelligence, hybrid retrieval and long-term memory.
 
 Instead of treating an AI assistant as only a chat window, Friday is designed as a complete knowledge workspace where users can:
 
@@ -116,7 +120,7 @@ Terminal chat supports `/new`, `/history`, `/resume <n|id>`, `/docs`, `/status`,
 
 ### Image uploads
 
-The chat composer includes a dedicated photo picker and rejects non-image selections in that picker. The backend currently accepts raster uploads but does not OCR or interpret image pixels; image files do not yield searchable text. The separate document upload flow supports PDF text extraction and UTF-8 text-like files such as Markdown, TXT, and CSV.
+The chat composer includes a dedicated photo picker and rejects non-image selections in that picker. Images are understood by a local Ollama vision model (set `FRIDAY_VISION_MODEL`, e.g. `llava:7b`) and/or OCR (Tesseract, `pip install -r backend/requirements-ocr.txt`). The document upload flow supports PDF (OCR for scanned pages), DOCX, PPTX, XLSX, Markdown, text, code, CSV, JSON and HTML.
 
 ---
 
@@ -158,7 +162,7 @@ Optional Ollama embedding generation
    ↓
 SQLite chunk storage
    ↓
-Lexical chunk ranking
+Hybrid chunk ranking
    ↓
 Relevant context
    ↓
@@ -173,7 +177,7 @@ Documents can become searchable knowledge sources for future conversations.
 
 ### 🔎 Search and retrieval
 
-The current search implementation uses lexical token overlap, not semantic/vector similarity.
+Search uses hybrid retrieval (SQLite FTS5 BM25 + in-memory embedding vector index, reciprocal-rank fusion) over the existing SQLite chunks; it falls back to keyword-only search when embeddings are unavailable.
 
 For example:
 
@@ -205,7 +209,7 @@ User Question
 Query Processing
       │
       ▼
-   Lexical Chunk Ranking
+   Hybrid Chunk Ranking
       │
       ▼
 Top-K Relevant Chunks
@@ -236,16 +240,16 @@ flowchart LR
    CLI -->|REST and SSE| API
    API --> DB[(SQLite and uploaded files)]
    API -->|embeddings and chat generation| Ollama[Ollama]
-   API -->|lexical ranking| Chunks[SQLite text chunks]
+   API -->|hybrid ranking| Chunks[SQLite text chunks]
 ```
 
-The browser and terminal chat share the same FastAPI service and storage. The current retrieval algorithm is lexical token-overlap ranking; embeddings are stored when Ollama returns them, but no vector index is implemented. See [docs/architecture.md](docs/architecture.md) for component details, API routes, schema, and request sequences.
+The browser and terminal chat share the same FastAPI service and storage. Retrieval is hybrid retrieval (SQLite FTS5 BM25 + in-memory embedding vector index, reciprocal-rank fusion). See [docs/architecture.md](docs/architecture.md) for component details, API routes, schema, and request sequences.
 
 ---
 
 # 🔬 Retrieval Architecture
 
-Friday's current retrieval layer ranks indexed chunks with a lightweight lexical scorer. Embeddings are generated during ingestion when Ollama is available and are stored with the chunk for future vector retrieval work.
+Friday ranks chunks with SQLite FTS5 (BM25) and an in-memory vector index over the stored Ollama embeddings, fused by reciprocal rank. Answers cite their sources as [n] with document, page and chunk.
 
 ```text
                          Query
@@ -257,7 +261,7 @@ Friday's current retrieval layer ranks indexed chunks with a lightweight lexical
                            │
                            ▼
                  ┌──────────────────┐
-                 │ Lexical Ranking  │
+                 │ Hybrid Ranking   │
                  └────────┬─────────┘
                            │
                            ▼
@@ -270,7 +274,7 @@ Friday's current retrieval layer ranks indexed chunks with a lightweight lexical
                          LLM
 ```
 
-The product UI exposes retrieval count and maximum distance settings. The current backend uses lexical ranking; stored embeddings provide the extension point for a future vector index.
+The product UI exposes retrieval count and maximum distance settings. The backend ranks with FTS5 + vector similarity; max distance filters on the fused score.
 
 ---
 
@@ -352,7 +356,7 @@ Current API boundary:
 | `/api/documents`                                | GET                | List documents                                            |
 | `/api/documents/upload`                         | POST               | Upload and schedule background ingestion                  |
 | `/api/documents/{id}`                           | GET, DELETE        | Read or delete a document                                 |
-| `/api/search`                                   | POST               | Search chunks using lexical ranking                       |
+| `/api/search`                                   | POST               | Hybrid search with source attribution                     |
 | `/api/chat`, `/api/chat/stream`                 | POST               | Non-streaming or SSE chat                                 |
 | `/api/conversations`                            | GET, POST          | List or create conversations                              |
 | `/api/conversations/{id}`                       | GET, PATCH, DELETE | Read, rename, or delete a conversation                    |
@@ -361,7 +365,7 @@ Current API boundary:
 | `/api/collections/{id}/documents/{document_id}` | POST, DELETE       | Associate or dissociate a document                        |
 | `/api/activity`                                 | GET                | Read recent activity                                      |
 
-Pydantic validates chat/search input lengths and numeric ranges. File ingestion extracts PDF or text content; raster images currently have no OCR or image-understanding path.
+Pydantic validates chat/search input lengths and numeric ranges. File ingestion extracts PDF, Office, text and code; images use a vision model and/or OCR (see docs/operations.md).
 
 ---
 
@@ -392,7 +396,7 @@ flowchart LR
    Ollama --> Embed[nomic-embed-text]
    Ollama --> Generate[llama3.2]
    Embed --> Stored[Optional embedding JSON in SQLite]
-   Chunks[SQLite text chunks] --> Rank[Lexical top-k ranking]
+   Chunks[SQLite text chunks] --> Rank[Hybrid top-k ranking]
    Rank --> Generate
    Generate --> Answer[Streamed answer and source metadata]
 ```
@@ -526,7 +530,7 @@ Optional embedding generation
 SQLite chunk text and optional embedding JSON
  │
  ▼
-Lexical token-overlap ranking
+Hybrid FTS5 + vector ranking
  │
  ▼
 Context for search and chat
@@ -563,7 +567,7 @@ Context for search and chat
 | `nomic-embed-text` | Optional chunk embeddings stored with content; not used for retrieval currently |
 | `llama3.2`         | Chat generation                                                                 |
 | SQLite             | Persistent conversations, documents, chunks, settings, and activity             |
-| Lexical ranking    | Current chunk search and retrieval                                              |
+| Hybrid ranking     | FTS5 BM25 + in-memory vector index, reciprocal-rank fusion                      |
 
 ## Engineering
 
@@ -744,7 +748,7 @@ flowchart LR
       API[FastAPI] -->|optional embedding request| Embed[Ollama nomic-embed-text]
       Embed --> Store[Embedding JSON stored in SQLite]
       API -->|chat request| Generate[Ollama llama3.2]
-      Chunks[SQLite text chunks] --> Rank[Lexical top-k retrieval]
+      Chunks[SQLite text chunks] --> Rank[Hybrid top-k retrieval]
       Rank --> Generate
       Generate --> Answer[Streamed answer]
 ```
@@ -913,15 +917,19 @@ This makes responses easier to inspect and validate.
 
 ## Phase 5 — Developer Agent
 
-- [ ] Repository ingestion
+- [x] Repository ingestion
 - [ ] Codebase indexing
 - [ ] Semantic code search
-- [ ] File-aware context
-- [ ] Code understanding
-- [ ] Tool calling
-- [ ] Terminal integration
-- [ ] Git integration
-- [ ] Agentic workflows
+- [x] File-aware context
+- [x] Code understanding
+- [x] Tool calling
+- [x] Terminal integration
+- [x] Git integration
+- [x] Agentic workflows
+
+The local coding agent is available in the Agent workspace view. Configure its Ollama model with `AGENT_MODEL` (defaults to `qwen2.5-coder:7b`). Read-only tools run automatically; file writes and commands wait for approval. `Allow always` is remembered only for that in-memory agent session. Each run is recorded in `data/trajectories.jsonl`.
+
+The command denylist is a safety net, not a sandbox. Shell commands can access files outside the selected project, so use Docker with only the intended project mounted when working with untrusted repositories. Model output arrives per model turn rather than per generated token. A local 7B model is less capable than hosted coding models on complex refactors; configure a suitable model for your hardware and tool-calling support.
 
 ## Phase 6 — Production
 
@@ -1013,3 +1021,4 @@ https://github.com/veer-bajpai/FRIDAY-Local-First-AI-Knowledge-Assistant
   <strong>FRIDAY</strong><br/>
    <em>Local intelligence. Searchable knowledge. One workspace.</em>
 </p>
+

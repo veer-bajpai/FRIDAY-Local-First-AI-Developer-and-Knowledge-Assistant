@@ -33,35 +33,43 @@ class MCPManager:
             raise RuntimeError("MCP servers are configured; install the optional 'mcp' package.") from exc
 
         await self.stack.__aenter__()
+        self.errors: dict[str, str] = {}
         for server_name, server in servers.items():
-            params = StdioServerParameters(
-                command=server["command"],
-                args=server.get("args", []),
-                env={**os.environ, **server.get("env", {})},
-            )
-            read_stream, write_stream = await self.stack.enter_async_context(stdio_client(params))
-            session = await self.stack.enter_async_context(ClientSession(read_stream, write_stream))
-            await session.initialize()
-            self.sessions[server_name] = session
-            for definition in (await session.list_tools()).tools:
-                tool_name = f"mcp__{server_name}__{definition.name}"
+            try:
+                await self._start_server(server_name, server, StdioServerParameters, stdio_client, ClientSession)
+            except Exception as exc:  # one broken server must not take the others (or FRIDAY) down
+                self.errors[server_name] = str(exc) or type(exc).__name__
 
-                async def invoke(args: dict, ctx: Context, *, _server=server_name, _tool=definition.name) -> str:
-                    del ctx
-                    result = await self.sessions[_server].call_tool(_tool, args)
-                    if getattr(result, "isError", False):
-                        raise ToolError(f"MCP tool {_server}.{_tool} returned an error.")
-                    return "\n".join(
-                        getattr(content, "text", str(content)) for content in result.content
-                    )
+    async def _start_server(self, server_name, server, StdioServerParameters, stdio_client, ClientSession):
+        params = StdioServerParameters(
+            command=server["command"],
+            args=server.get("args", []),
+            env={**os.environ, **server.get("env", {})},
+        )
+        read_stream, write_stream = await self.stack.enter_async_context(stdio_client(params))
+        session = await self.stack.enter_async_context(ClientSession(read_stream, write_stream))
+        await session.initialize()
+        self.sessions[server_name] = session
+        for definition in (await session.list_tools()).tools:
+            tool_name = f"mcp__{server_name}__{definition.name}"
 
-                self.tools[tool_name] = Tool(
-                    tool_name,
-                    definition.description or definition.name,
-                    definition.inputSchema,
-                    invoke,
-                    network=True,
+            async def invoke(args: dict, ctx: Context, *, _server=server_name, _tool=definition.name) -> str:
+                del ctx
+                result = await self.sessions[_server].call_tool(_tool, args)
+                if getattr(result, "isError", False):
+                    raise ToolError(f"MCP tool {_server}.{_tool} returned an error.")
+                return "\n".join(
+                    getattr(content, "text", str(content)) for content in result.content
                 )
+
+            self.tools[tool_name] = Tool(
+                tool_name,
+                definition.description or definition.name,
+                definition.inputSchema,
+                invoke,
+                network=True,
+            )
 
     async def close(self) -> None:
         await self.stack.aclose()
+

@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shlex
 from pathlib import Path
 
 from .config import HOME, MODES, load_settings
@@ -33,6 +35,39 @@ NETWORK_COMMAND = re.compile(
     r"\b(curl|wget|ssh|gh|pip3?\s+install|npm\s+(i|install)|git\s+(push|pull|fetch|clone))\b",
     re.I,
 )
+
+_WIN_ABS = re.compile(r"^[A-Za-z]:[\\/]|^\\\\")
+
+
+def args_stay_in_workspace(cmd: str, root: Path) -> bool:
+    """True when no argument of a read-only command points outside the workspace.
+
+    Used to stop 'safe' commands such as ``cat ~/.ssh/id_rsa`` or ``ls ../../`` from
+    running without approval.
+    """
+    if re.search(r"""(^|[\s"'=])([A-Za-z]:[\\/]|\\\\|%USERPROFILE%|\$env:)""", cmd, re.I):
+        return False  # Windows absolute / UNC / profile paths
+    try:
+        tokens = shlex.split(cmd, posix=True)
+    except ValueError:
+        return False
+    root = root.resolve()
+    for token in tokens[1:]:
+        if token.startswith("-"):
+            if "=" not in token:
+                continue
+            token = token.split("=", 1)[1]
+        if token.startswith("~") or _WIN_ABS.match(token):
+            return False
+        candidate = Path(token) if os.path.isabs(token) else root / token
+        try:
+            resolved = candidate.resolve()
+        except (OSError, RuntimeError):
+            return False
+        if resolved != root and root not in resolved.parents:
+            return False
+    return True
+
 
 def bash_prefix(cmd: str) -> str:
     """'git commit -m x' -> 'git commit'; 'pytest -q' -> 'pytest'. Used for 'always allow' rules."""
@@ -78,7 +113,8 @@ class Permissions:
         if rule in self.deny or tool.name in self.deny:
             return "deny", f"Blocked by a deny rule ({rule})."
 
-        safe_cmd = tool.name == "bash" and SAFE_BASH.match(cmd.strip()) and not CHAINING.search(cmd)
+        safe_cmd = (tool.name == "bash" and SAFE_BASH.match(cmd.strip()) and not CHAINING.search(cmd)
+                    and args_stay_in_workspace(cmd, self.root))
         command = args.get("command", "") if tool.name == "bash" else ""
         is_network = (tool.network or bool(NETWORK_COMMAND.search(command))
                       or tool.name == "web_fetch" or tool.name.startswith("mcp__"))
@@ -128,3 +164,4 @@ class Permissions:
     # bash rules are prefix rules, so "bash:git commit" also matches later "git commit -m y"
     def matches_allow(self, tool: Tool, args: dict) -> bool:
         return rule_for(tool, args) in self.allow
+

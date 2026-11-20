@@ -110,7 +110,7 @@ def test_fullscreen_terminal_app_mounts_without_live_backend():
         if path == "/api/agent/sessions":
             return {"id": "test-session", "mode": "default", "model": "test-model", "workspace": "test"}
         if path == "/api/agent/commands":
-            return {}
+            return {"check": "Run the project checks"}
         return {}
 
     async def run_app():
@@ -118,6 +118,23 @@ def test_fullscreen_terminal_app_mounts_without_live_backend():
         async with app.run_test() as pilot:
             assert app.query_one("#transcript")
             assert app.query_one("#prompt").disabled is False
+            guide = app.query_one("#guide-content")
+            assert "/plan" in str(guide.content)
+            assert "/check" in str(guide.content)
+
+            # Friday Code indicator: "✻ Thinking… (3s · esc to interrupt)", then "Writing…" while streaming
+            app._start_thinking()
+            app.thinking_started_at -= 3.1
+            app.request_state = "processing"
+            app._tick_thinking()
+            thinking = str(app.query_one("#thinking").content)
+            assert "3s" in thinking and "esc" in thinking and "interrupt" in thinking
+            app.request_state = "generating"
+            app._tick_thinking()
+            assert "Writing" in str(app.query_one("#thinking").content)
+            app._stop_thinking()
+            assert str(app.query_one("#thinking").content) == ""
+            assert app.thinking_timer is None
             await pilot.press("tab")
 
     run(run_app())
@@ -169,6 +186,25 @@ def test_context_compaction_tracks_usage(tmp_path: Path, monkeypatch):
     assert report["input_tokens"] == 11
     assert report["output_tokens"] == 7
 
+def test_turn_uses_configured_output_token_budget(tmp_path: Path, monkeypatch):
+    options_seen = []
+
+    async def fake_chat_stream(model, messages, tools=None, options=None):
+        options_seen.append(options)
+        yield {"message": {"content": "Complete answer."}, "done": True}
+
+    monkeypatch.setattr(engine, "NUM_PREDICT", 2048, raising=False)
+    monkeypatch.setattr(engine, "chat_stream", fake_chat_stream)
+    session = create_session(tmp_path)
+
+    events = run(_collect_events(engine.run_turn(session, "Explain this.")))
+
+    assert options_seen == [{"num_ctx": config.NUM_CTX, "num_predict": 2048}]
+    assert "".join(event["content"] for event in events if event["type"] == "token") == "Complete answer."
+
+async def _collect_events(events):
+    return [event async for event in events]
+
 def test_parallel_subagent_tool_is_bounded_and_read_only():
     context = Context(root=Path.cwd())
 
@@ -201,6 +237,8 @@ def test_git_tools_work_in_an_isolated_repository(tmp_path: Path, monkeypatch):
     assert subprocess.run(
         ["git", "branch", "--show-current"], cwd=root, check=True, capture_output=True, text=True
     ).stdout.strip() == "feature/test"
+    assert "On branch" not in run(git_ops.git_branch({}, context))  # list mode works
+    run(git_ops.git_add({"paths": ["sample.txt"]}, context))  # commits only what was staged
     assert "update sample" in run(git_ops.git_commit({"message": "update sample"}, context))
     assert not subprocess.run(
         ["git", "status", "--porcelain"], cwd=root, check=True, capture_output=True, text=True
@@ -210,11 +248,11 @@ def test_git_tools_work_in_an_isolated_repository(tmp_path: Path, monkeypatch):
 
     commands = []
 
-    async def fake_run(ctx, *args, cwd=None):
+    async def fake_run(ctx, *args, timeout=300):
         commands.append(args)
         return "ok"
 
-    monkeypatch.setattr(git_ops, "_run", fake_run)
+    monkeypatch.setattr(git_ops, "_run_cmd", fake_run)
     assert run(git_ops.git_review_diff({"pr": 42}, context)) == "ok"
     with pytest.raises(ToolError, match="positive integer"):
         run(git_ops.git_review_diff({"pr": "invalid"}, context))
@@ -315,12 +353,10 @@ def test_insights_report_ignores_bad_rows_and_escapes_tool_names(tmp_path: Path,
         json.dumps({"tool": "<script>alert(1)</script>", "ok": False}) + "\nnot-json\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(insights, "HOME", tmp_path / "home")
-
     report = insights.build_report(root)
     content = report.read_text(encoding="utf-8")
     assert report.is_file()
-    assert "1 recorded tool calls" in content
+    assert "<strong>1</strong><br>tool calls" in content  # the bad row was skipped
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in content
     assert "<script>alert(1)</script>" not in content
 
@@ -449,3 +485,4 @@ def test_local_agent_api_rejects_remote_client_with_spoofed_local_origin():
     with pytest.raises(HTTPException) as exc:
         require_local_agent_request(request_for(("203.0.113.8", 1234), "http://localhost:3000"))
     assert exc.value.status_code == 403
+

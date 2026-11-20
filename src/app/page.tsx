@@ -1,1136 +1,643 @@
 "use client";
 
-import {
-  isValidElement,
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
-import ReactMarkdown from "react-markdown";
-import rehypeHighlight from "rehype-highlight";
-import remarkGfm from "remark-gfm";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Activity,
   Archive,
-  ArrowUp,
-  Check,
-  ChevronDown,
-  Copy,
+  Bot,
+  Brain,
   FileText,
-  FolderOpen,
   Grid2X2,
-  ImagePlus,
+  LayoutGrid,
   Menu,
   MessageSquare,
-  MoreHorizontal,
-  Paperclip,
+  Moon,
   Plus,
   Search,
   Settings,
   Sparkles,
+  Sun,
   Upload,
   X,
 } from "lucide-react";
-import "highlight.js/styles/github.css";
+import AgentPanel from "./agent/AgentPanel";
+import { ChatHeader, Composer, ContextRail, Thread } from "./ui/ChatView";
+import { Dashboard } from "./ui/Dashboard";
+import { Logo } from "./ui/Logo";
+import {
+  API,
+  SUPPORTED_UPLOAD_PATTERN,
+  UPLOAD_ACCEPT,
+  api,
+  errorMessage,
+  type ActivityEvent,
+  type AgentSessionSummary,
+  type Collection,
+  type Conversation,
+  type Document,
+  type Health,
+  type Memory,
+  type Message,
+  type SettingsData,
+  type Source,
+  type Step,
+} from "./ui/api";
+import { useTheme } from "./ui/theme";
+import {
+  ActivityView,
+  CollectionsView,
+  DocumentsView,
+  HistoryView,
+  MemoryView,
+  SearchView,
+  SettingsView,
+} from "./ui/Views";
+import "./ui/ui.css";
 
 type View =
+  | "Home"
   | "Chat"
+  | "Agent"
   | "Documents"
+  | "Search"
+  | "Collections"
+  | "Memory"
   | "Activity"
   | "History"
-  | "My library"
-  | "Collections"
   | "Settings";
-type Message = {
-  role: "user" | "assistant";
-  content: string;
-  created_at?: string;
-};
-type Document = {
-  id: string;
-  name: string;
-  type: string;
-  size: number;
-  chunks: number;
-  status: string;
-  error?: string | null;
-};
-type Conversation = { id: string; title: string; updated_at: string };
-type ActivityEvent = {
-  id: number;
-  type: string;
-  title: string;
-  detail?: string;
-  status: string;
-  created_at: string;
-};
-type Collection = { id: string; name: string; document_count: number };
-type SettingsData = {
-  model: string;
-  embed_model: string;
-  top_k: number;
-  max_distance: number;
-  temperature: number;
-  system_prompt: string;
+
+const NAV: { view: View; icon: typeof MessageSquare }[] = [
+  { view: "Home", icon: LayoutGrid },
+  { view: "Chat", icon: MessageSquare },
+  { view: "Agent", icon: Bot },
+  { view: "Documents", icon: FileText },
+  { view: "Search", icon: Search },
+  { view: "Collections", icon: Grid2X2 },
+  { view: "Memory", icon: Brain },
+  { view: "Activity", icon: Activity },
+  { view: "Settings", icon: Settings },
+];
+
+const SUBTITLES: Partial<Record<View, string>> = {
+  Agent: "Inspect, edit and test a project with your approval",
+  Documents: "Files FRIDAY can read, search and cite",
+  Search: "Hybrid keyword + semantic search across your files",
+  Collections: "Group documents by topic",
+  Memory: "Facts and preferences FRIDAY keeps across chats",
+  Activity: "Everything that happened in this workspace",
+  History: "All saved conversations",
+  Settings: "Models, retrieval and appearance",
 };
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers ?? {});
-  const hasBody = init?.body !== undefined && !(init.body instanceof FormData);
-
-  if (hasBody && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-  }
-
-  if (!hasBody && headers.has("Content-Type")) {
-    headers.delete("Content-Type");
-  }
-
-  const response = await fetch(`${API}${path}`, {
-    ...init,
-    headers,
-  });
-  if (!response.ok)
-    throw new Error((await response.text()) || "Request failed");
-  return response.json();
-}
-
-function formatSize(bytes: number) {
-  if (!bytes) return "0 KB";
-  return bytes > 1024 * 1024
-    ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
-    : `${Math.max(1, Math.round(bytes / 1024))} KB`;
-}
-
-const IMAGE_FILE_PATTERN = /\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i;
-
-function isImageFile(file: File) {
-  return file.type.startsWith("image/") || IMAGE_FILE_PATTERN.test(file.name);
-}
-
-function getTextContent(node: ReactNode): string {
-  if (typeof node === "string" || typeof node === "number") {
-    return String(node);
-  }
-  if (Array.isArray(node)) {
-    return node.map(getTextContent).join("");
-  }
-  if (isValidElement<{ children?: ReactNode }>(node)) {
-    return getTextContent(node.props.children);
-  }
-  return "";
-}
-
-function MarkdownCodeBlock({ children }: { children?: ReactNode }) {
-  const [copied, setCopied] = useState(false);
-  const code = getTextContent(children).replace(/\n$/, "");
-
-  async function copyCode() {
-    await navigator.clipboard.writeText(code);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1600);
-  }
-
-  return (
-    <div className="markdown-code-block">
-      <button
-        className="copy-code-button"
-        type="button"
-        onClick={() => void copyCode()}
-        aria-label={copied ? "Code copied" : "Copy code"}
-        title={copied ? "Code copied" : "Copy code"}
-      >
-        {copied ? <Check size={14} /> : <Copy size={14} />}
-        <span>{copied ? "Copied" : "Copy"}</span>
-      </button>
-      <pre>{children}</pre>
-    </div>
-  );
+function greeting() {
+  const hour = new Date().getHours();
+  return hour < 5 ? "Working late, Veer" : hour < 12 ? "Good morning, Veer" : hour < 17 ? "Good afternoon, Veer" : "Good evening, Veer";
 }
 
 export default function Home() {
-  const [view, setView] = useState<View>("Chat");
-  const [mobileMenu, setMobileMenu] = useState(false);
-  const [message, setMessage] = useState("");
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [conversationId, setConversationId] = useState<string>();
+  const theme = useTheme();
+  const [view, setView] = useState<View>("Home");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
   const [documents, setDocuments] = useState<Document[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [events, setEvents] = useState<ActivityEvent[]>([]);
   const [collections, setCollections] = useState<Collection[]>([]);
+  const [memories, setMemories] = useState<Memory[]>([]);
+  const [sessions, setSessions] = useState<AgentSessionSummary[]>([]);
   const [settingsData, setSettingsData] = useState<SettingsData>();
-  const [isSending, setIsSending] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
-  const [error, setError] = useState("");
+  const [models, setModels] = useState<string[]>([]);
+  const [health, setHealth] = useState<Health>();
+
+  const [draft, setDraft] = useState("");
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [conversationId, setConversationId] = useState<string>();
+  const [sending, setSending] = useState(false);
+  const [liveStartedAt, setLiveStartedAt] = useState<number>();
+  const [livePhrase, setLivePhrase] = useState<string>();
+  const [uploading, setUploading] = useState(false);
+
+  const activeRequest = useRef<AbortController | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const attachmentInput = useRef<HTMLInputElement>(null);
-  const imageInput = useRef<HTMLInputElement>(null);
 
-  async function loadDocuments() {
-    setDocuments(await api<Document[]>("/api/documents"));
-  }
-  async function loadConversations() {
-    setConversations(await api<Conversation[]>("/api/conversations"));
-  }
-  async function loadActivity() {
-    setEvents(await api<ActivityEvent[]>("/api/activity"));
-  }
-
-  useEffect(() => {
-    fileInput.current?.setAttribute("webkitdirectory", "");
-    Promise.all([
-      api<Document[]>("/api/documents"),
-      api<Conversation[]>("/api/conversations"),
-      api<ActivityEvent[]>("/api/activity"),
-      api<Collection[]>("/api/collections"),
-      api<SettingsData>("/api/settings"),
-    ])
-      .then(
-        ([
-          loadedDocuments,
-          loadedConversations,
-          loadedEvents,
-          loadedCollections,
-          loadedSettings,
-        ]) => {
-          setDocuments(loadedDocuments);
-          setConversations(loadedConversations);
-          setEvents(loadedEvents);
-          setCollections(loadedCollections);
-          setSettingsData(loadedSettings);
-        },
-      )
-      .catch((reason) =>
-        setError(
-          reason instanceof Error ? reason.message : "Could not load workspace",
-        ),
-      );
+  const report = useCallback((reason: unknown, fallback: string) => {
+    setError(reason instanceof Error ? reason.message : fallback);
   }, []);
 
-  async function selectConversation(id: string) {
+  /* ------------------------------------------------------------ loading */
+
+  const loadDocuments = useCallback(() => api<Document[]>("/api/documents").then(setDocuments), []);
+  const loadConversations = useCallback(() => api<Conversation[]>("/api/conversations").then(setConversations), []);
+  const loadEvents = useCallback(() => api<ActivityEvent[]>("/api/activity?limit=200").then(setEvents), []);
+  const loadMemories = useCallback(() => api<Memory[]>("/api/memories").then(setMemories), []);
+  const loadSessions = useCallback(() => api<AgentSessionSummary[]>("/api/agent/sessions").then(setSessions), []);
+  const loadHealth = useCallback(() => api<Health>("/api/health").then(setHealth), []);
+
+  useEffect(() => {
+    Promise.all([
+      loadDocuments(),
+      loadConversations(),
+      loadEvents(),
+      api<Collection[]>("/api/collections").then(setCollections),
+      api<SettingsData>("/api/settings").then(setSettingsData),
+    ]).catch((reason) => report(reason, "Could not reach the FRIDAY API. Is the backend running?"));
+    // optional panels: failures here should not block the workspace
+    loadMemories().catch(() => undefined);
+    loadSessions().catch(() => undefined);
+    loadHealth().catch(() => undefined);
+    api<{ models?: { name: string }[] }>("/api/models")
+      .then((data) => setModels((data.models ?? []).map((m) => m.name).filter((name) => !/embed/i.test(name))))
+      .catch(() => undefined);
+    const poll = window.setInterval(() => loadHealth().catch(() => undefined), 30000);
+    return () => window.clearInterval(poll);
+  }, [loadConversations, loadDocuments, loadEvents, loadHealth, loadMemories, loadSessions, report]);
+
+  // refresh dashboard data whenever it is opened
+  useEffect(() => {
+    if (view !== "Home") return;
+    loadEvents().catch(() => undefined);
+    loadSessions().catch(() => undefined);
+  }, [view, loadEvents, loadSessions]);
+
+  // documents still processing: poll until ready
+  useEffect(() => {
+    if (!documents.some((d) => d.status === "processing")) return;
+    const timer = window.setTimeout(() => loadDocuments().catch(() => undefined), 2000);
+    return () => window.clearTimeout(timer);
+  }, [documents, loadDocuments]);
+
+  /* ------------------------------------------------------------ navigation */
+
+  const go = useCallback((next: View) => {
+    setView(next);
+    setMenuOpen(false);
+  }, []);
+
+  const newChat = useCallback(() => {
+    if (sending) return;
+    setConversationId(undefined);
+    setMessages([]);
+    setDraft("");
+    go("Chat");
+  }, [go, sending]);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      const mod = event.ctrlKey || event.metaKey;
+      if (mod && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        go("Search");
+      } else if (mod && event.shiftKey && event.key.toLowerCase() === "o") {
+        event.preventDefault();
+        newChat();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [go, newChat]);
+
+  async function openConversation(id: string) {
+    if (sending) return;
     try {
-      const conversation = await api<{ id: string; messages: Message[] }>(
-        `/api/conversations/${id}`,
-      );
+      const conversation = await api<{ id: string; messages: Message[] }>(`/api/conversations/${id}`);
       setConversationId(conversation.id);
       setMessages(conversation.messages);
-      setView("Chat");
+      go("Chat");
     } catch (reason) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : "Could not load conversation",
-      );
+      report(reason, "Could not open the conversation");
     }
   }
 
-  async function newConversation() {
+  async function deleteConversation(id: string) {
     try {
-      const conversation = await api<{ id: string }>("/api/conversations", {
-        method: "POST",
-        body: JSON.stringify({ title: "New conversation" }),
-      });
-      setConversationId(conversation.id);
-      setMessages([]);
+      await api(`/api/conversations/${id}`, { method: "DELETE" });
+      if (id === conversationId) {
+        setConversationId(undefined);
+        setMessages([]);
+      }
       await loadConversations();
-      setView("Chat");
     } catch (reason) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : "Could not create conversation",
-      );
+      report(reason, "Could not delete the conversation");
     }
   }
 
-  async function handleSend(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const question = message.trim();
-    if (!question || isSending) return;
-    const textarea = event.currentTarget.querySelector("textarea");
-    if (textarea) textarea.style.height = "auto";
-    setMessages((current) => [...current, { role: "user", content: question }]);
-    setMessage("");
-    setIsSending(true);
+  async function changeModel(model: string) {
+    if (!settingsData) return;
+    try {
+      setSettingsData(await api<SettingsData>("/api/settings", { method: "PUT", body: JSON.stringify({ ...settingsData, model }) }));
+    } catch (reason) {
+      report(reason, "Could not switch the model");
+    }
+  }
+
+  /* ------------------------------------------------------------ chat */
+
+  async function send(text: string) {
+    const question = text.trim();
+    if (!question || sending) return;
+    go("Chat");
+    setDraft("");
     setError("");
+
+    const started = Date.now();
+    const remembering = /^\s*(\/remember|remember(\s+that)?\s*:)/i.test(question);
+    let steps: Step[] = [{ label: remembering ? "Saving to memory" : "Searching your documents and memory", state: "live" }];
+    let content = "";
+    let sources: Source[] | undefined;
+    let memoriesUsed: Memory[] | undefined;
+    let model: string | null | undefined;
+    let note: string | undefined;
+    let conversation = conversationId;
+    let failed = false;
+
+    const base = messages.length;
+    const assistantIndex = base + 1;
+    const paint = () =>
+      setMessages((current) => {
+        const next = current.slice(0, assistantIndex);
+        next[assistantIndex] = {
+          role: "assistant",
+          content,
+          steps,
+          sources,
+          memories: memoriesUsed,
+          model,
+          note,
+          failed,
+          elapsedMs: Date.now() - started,
+          created_at: new Date().toISOString(),
+        };
+        return next;
+      });
+
+    setMessages((current) => [...current, { role: "user", content: question }]);
+    setSending(true);
+    setLiveStartedAt(started);
+    setLivePhrase(remembering ? "Saving to memory" : undefined);
+    paint();
+
+    const controller = new AbortController();
+    activeRequest.current = controller;
+    let lastPaint = 0;
+
     try {
       const response = await fetch(`${API}/api/chat/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          question,
-          k: settingsData?.top_k ?? 3,
-          conversation_id: conversationId,
-        }),
+        signal: controller.signal,
+        body: JSON.stringify({ question, k: settingsData?.top_k ?? 3, conversation_id: conversationId }),
       });
-      if (!response.ok || !response.body)
-        throw new Error("Chat request failed");
-      const assistantIndex = messages.length + 1;
-      let assistantContent = "";
-      let lastPaint = 0;
-      const paintAssistant = (force = false) => {
-        const now = performance.now();
-        if (!force && now - lastPaint < 50) return;
-        lastPaint = now;
-        const content = assistantContent;
-        setMessages((current) =>
-          current.map((item, index) =>
-            index === assistantIndex ? { ...item, content } : item,
-          ),
-        );
-      };
-      setMessages((current) => [
-        ...current,
-        { role: "assistant", content: "" },
-      ]);
+      if (!response.ok) throw new Error(await errorMessage(response, "Chat request failed"));
+      if (!response.body) throw new Error("Chat request failed");
+
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-      let completedConversationId = conversationId;
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
-        const events = buffer.split("\n\n");
-        buffer = events.pop() ?? "";
-        for (const event of events) {
-          if (!event.startsWith("data: ")) continue;
-          const payload = JSON.parse(event.slice(6)) as {
+        const blocks = buffer.split("\n\n");
+        buffer = blocks.pop() ?? "";
+        for (const block of blocks) {
+          if (!block.startsWith("data: ")) continue;
+          const payload = JSON.parse(block.slice(6)) as {
             token?: string;
             done?: boolean;
-            conversation_id?: string;
             error?: string;
+            conversation_id?: string | null;
+            sources?: Source[];
+            memories?: Memory[];
+            model?: string | null;
+            note?: string | null;
+            meta?: { model?: string | null; note?: string | null; sources?: number; memories?: number; memory?: Memory };
           };
+          if (payload.conversation_id) conversation = payload.conversation_id;
           if (payload.error) throw new Error(payload.error);
-          if (payload.conversation_id)
-            completedConversationId = payload.conversation_id;
+          if (payload.meta) {
+            model = payload.meta.model ?? model;
+            note = payload.meta.note ?? undefined;
+            if (payload.meta.memory) {
+              steps = [{ label: "Saved to long-term memory", state: "done" }];
+            } else {
+              const found = payload.meta.sources ?? 0;
+              const mem = payload.meta.memories ?? 0;
+              steps = [
+                {
+                  label: found
+                    ? `Found ${found} relevant passage${found === 1 ? "" : "s"} in your documents${mem ? ` · ${mem} memor${mem === 1 ? "y" : "ies"}` : ""}`
+                    : `No matching documents${mem ? ` · using ${mem} memor${mem === 1 ? "y" : "ies"}` : " · answering from the model"}`,
+                  state: "done",
+                },
+                { label: `Writing the answer with ${model ?? "the local model"}`, state: "live" },
+              ];
+              setLivePhrase("Writing");
+            }
+            paint();
+          }
           if (payload.token) {
-            assistantContent += payload.token;
-            paintAssistant();
+            content += payload.token;
+            const now = performance.now();
+            if (now - lastPaint > 40) {
+              lastPaint = now;
+              paint();
+            }
+          }
+          if (payload.done) {
+            sources = payload.sources ?? sources;
+            memoriesUsed = payload.memories ?? memoriesUsed;
+            model = payload.model ?? model;
+            note = payload.note ?? note;
+            steps = steps.map((step) => ({ ...step, state: "done" }));
           }
         }
       }
-      paintAssistant(true);
-      setConversationId(completedConversationId);
-      await loadConversations();
+      steps = steps.map((step) => ({ ...step, state: "done" }));
+      paint();
+      if (remembering) loadMemories().catch(() => undefined);
     } catch (reason) {
-      const message =
-        reason instanceof Error ? reason.message : "Chat request failed";
-      setError(message);
-      setMessages((current) => {
-        const previous = [...current];
-        const last = previous[previous.length - 1];
-        if (last && last.role === "assistant" && last.content === "") {
-          previous.splice(previous.length - 1, 1, {
-            role: "assistant",
-            content:
-              "I could not reach the Friday API. Check that the backend is running.",
-          });
-          return previous;
-        }
-        return [
-          ...previous,
-          {
-            role: "assistant",
-            content:
-              "I could not reach the Friday API. Check that the backend is running.",
-          },
-        ];
-      });
+      const aborted = reason instanceof Error && reason.name === "AbortError";
+      failed = true;
+      const message = aborted
+        ? "Stopped."
+        : reason instanceof TypeError
+          ? "I could not reach the FRIDAY API. Check that the backend is running."
+          : reason instanceof Error
+            ? reason.message
+            : "Chat request failed";
+      steps = steps.map((step) => (step.state === "live" ? { ...step, state: aborted ? "done" : "error" } : step));
+      if (!aborted) {
+        steps.push({ label: message, state: "error" });
+        setError(message);
+      }
+      content = content || (aborted ? "_Stopped before an answer was written._" : "");
+      paint();
     } finally {
-      setIsSending(false);
+      activeRequest.current = null;
+      setSending(false);
+      setLiveStartedAt(undefined);
+      setLivePhrase(undefined);
+      if (conversation) setConversationId(conversation);
+      loadConversations().catch(() => undefined);
+      loadEvents().catch(() => undefined);
     }
   }
+
+  /* ------------------------------------------------------------ uploads */
 
   async function upload(files: File[]) {
-    const supportedFiles = files.filter((file) =>
-      /\.(pdf|md|txt|csv|png|jpe?g|gif|webp|bmp|heic|heif)$/i.test(file.name),
-    );
-    if (!supportedFiles.length) {
-      setError("Choose PDF, Markdown, text, CSV, or image files.");
+    const supported = files.filter((file) => SUPPORTED_UPLOAD_PATTERN.test(file.name));
+    if (!supported.length) {
+      setError("Choose PDF, Word, PowerPoint, Excel, text, Markdown, code, CSV, JSON, HTML or image files.");
       return;
     }
-    setIsUploading(true);
-    try {
-      await Promise.all(
-        supportedFiles.map(async (file) => {
-          const form = new FormData();
-          form.append("file", file);
-          const response = await fetch(`${API}/api/documents/upload`, {
-            method: "POST",
-            body: form,
-          });
-          if (!response.ok) throw new Error(`Upload failed for ${file.name}`);
-        }),
-      );
-      await loadDocuments();
-      await loadActivity();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Upload failed");
-    } finally {
-      setIsUploading(false);
-    }
+    setUploading(true);
+    const failures: string[] = [];
+    await Promise.all(
+      supported.map(async (file) => {
+        const form = new FormData();
+        form.append("file", file);
+        const response = await fetch(`${API}/api/documents/upload`, { method: "POST", body: form }).catch(() => null);
+        if (!response) failures.push(`${file.name}: the API is unreachable`);
+        else if (!response.ok) failures.push(`${file.name}: ${await errorMessage(response, "Upload failed")}`);
+      }),
+    );
+    setUploading(false);
+    const skipped = files.length - supported.length;
+    if (failures.length) setError(failures.join(" · "));
+    else setNotice(`Added ${supported.length} file${supported.length === 1 ? "" : "s"}${skipped ? ` · ${skipped} unsupported skipped` : ""}. Indexing…`);
+    loadDocuments().catch(() => undefined);
+    loadEvents().catch(() => undefined);
   }
 
-  const navigation: [typeof MessageSquare, View][] = [
-    [MessageSquare, "Chat"],
-    [FileText, "Documents"],
-    [Activity, "Activity"],
-    [Archive, "History"],
-    [FolderOpen, "My library"],
-    [Grid2X2, "Collections"],
-    [Settings, "Settings"],
-  ];
+  /* ------------------------------------------------------------ render */
+
+  const online = health ? health.checks.ollama?.status !== "error" : null;
+  const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+  const activeTitle = conversations.find((c) => c.id === conversationId)?.title ?? (messages.length ? messages[0].content.slice(0, 60) : "New chat");
+  const extraction = health?.checks.extraction;
+  const capability = health
+    ? [online, health.checks.ollama?.chat_model?.installed, health.checks.ollama?.embed_model?.installed, extraction?.ocr, !!extraction?.vision_model]
+    : [];
+  const capabilityScore = capability.length ? capability.filter(Boolean).length / capability.length : 0;
+
+  const composerProps = {
+    value: draft,
+    onChange: setDraft,
+    onSubmit: () => void send(draft),
+    onStop: () => activeRequest.current?.abort(),
+    busy: sending,
+    onAttach: () => fileInput.current?.click(),
+    documentsCount: documents.length,
+    memoriesCount: memories.length,
+    onOpenDocuments: () => go("Documents"),
+    onOpenMemory: () => go("Memory"),
+    models,
+    settings: settingsData,
+    onModelChange: (model: string) => void changeModel(model),
+  };
+
+  const title =
+    view === "Home" ? greeting() : view === "Chat" ? activeTitle : view;
+  const subtitle =
+    view === "Home"
+      ? `${new Date().toLocaleDateString("en-US", { weekday: "long", day: "numeric", month: "short" })} · ${online === false ? "Ollama is offline" : "everything runs on this device"}`
+      : view === "Chat"
+        ? `${messages.filter((m) => m.role === "user").length} message${messages.filter((m) => m.role === "user").length === 1 ? "" : "s"} · answers cite your local files`
+        : SUBTITLES[view];
 
   return (
-    <main className="app-shell">
-      <aside className={`sidebar ${mobileMenu ? "is-open" : ""}`}>
-        <div className="brand-row">
-          <div className="brand-mark">
-            <Sparkles size={17} />
-          </div>
-          <span>friday</span>
-          <button
-            className="icon-button mobile-close"
-            onClick={() => setMobileMenu(false)}
-            aria-label="Close navigation"
-          >
-            <X size={18} />
+    <div className="app">
+      {menuOpen && <div className="scrim" onClick={() => setMenuOpen(false)} />}
+      <aside className={`side${menuOpen ? " is-open" : ""}`} aria-label="Navigation">
+        <div className="side-brand">
+          <Logo />
+          <button type="button" className="icon-btn ghost sm menu-btn" aria-label="Close menu" onClick={() => setMenuOpen(false)}>
+            <X size={16} />
           </button>
         </div>
-        <button
-          className="new-chat"
-          onClick={newConversation}
-          disabled={isSending}
-        >
-          <Plus size={16} /> New conversation <span>⌘ K</span>
+        <button type="button" className="side-new" onClick={newChat} disabled={sending}>
+          <Plus size={16} /> New chat <kbd>Ctrl ⇧ O</kbd>
         </button>
-        <nav className="main-nav" aria-label="Primary navigation">
-          {navigation.map(([Icon, label]) => (
-            <button
-              className={`nav-item ${view === label ? "selected" : ""}`}
-              key={label}
-              disabled={isSending}
-              onClick={() => {
-                setView(label);
-                setMobileMenu(false);
-              }}
-            >
-              <Icon size={17} /> {label}
+        <nav aria-label="Primary">
+          {NAV.map(({ view: item, icon: Icon }) => {
+            const count =
+              item === "Chat" ? conversations.length : item === "Documents" ? documents.length : item === "Memory" ? memories.length
+                : item === "Collections" ? collections.length : item === "Agent" ? sessions.length : 0;
+            return (
+              <button type="button" key={item} className={`nav${view === item ? " is-active" : ""}`} onClick={() => go(item)}
+                aria-current={view === item ? "page" : undefined}>
+                <Icon size={16} />
+                {item}
+                {count > 0 && <span className="count">{count}</span>}
+              </button>
+            );
+          })}
+        </nav>
+        <div className="side-label">
+          Recents
+          {conversations.length > 0 && (
+            <button type="button" onClick={() => go("History")}>
+              <Archive size={11} style={{ verticalAlign: -1 }} /> All
+            </button>
+          )}
+        </div>
+        <div className="recents">
+          {conversations.slice(0, 12).map((conversation) => (
+            <button type="button" key={conversation.id} title={conversation.title}
+              className={`recent${conversation.id === conversationId && view === "Chat" ? " is-active" : ""}`}
+              onClick={() => void openConversation(conversation.id)}>
+              {conversation.title}
             </button>
           ))}
-        </nav>
-        <div className="sidebar-spacer" />
-        <div className="local-card">
-          <div className="status-dot" />
-          <div>
-            <strong>Local engine</strong>
-            <span>Ollama connected</span>
-          </div>
-          <MoreHorizontal size={16} />
+          {!conversations.length && <div className="recent-empty">Your chats will appear here</div>}
         </div>
-        <div className="profile">
-          <div className="avatar">VB</div>
+        <div className="side-spacer" />
+        <button type="button" className="health-card" onClick={() => go("Home")}>
+          <b><Sparkles size={14} /> {online === false ? "Ollama is offline" : "Local engine"}</b>
+          <small>
+            {!health
+              ? "Checking local services…"
+              : online === false
+                ? "Start it with: ollama serve"
+                : `${health.checks.ollama?.chat_model?.name ?? "model"} · ${extraction?.ocr ? "OCR ready" : "no OCR"}${extraction?.vision_model ? " · vision on" : ""}`}
+          </small>
+          <div className="bar"><i style={{ width: `${Math.round(capabilityScore * 100)}%` }} /></div>
+        </button>
+        <div className="me">
+          <span className="avatar">VB</span>
           <div>
-            <strong>Veer Bajpai</strong>
-            <span>Personal workspace</span>
+            <b>Veer Bajpai</b>
+            <small>Local workspace</small>
           </div>
-          <ChevronDown size={16} />
         </div>
       </aside>
-      <section className="workspace">
+
+      <main className="main">
         <header className="topbar">
-          <button
-            className="icon-button menu-trigger"
-            onClick={() => setMobileMenu(true)}
-            aria-label="Open navigation"
-          >
-            <Menu size={19} />
+          <button type="button" className="icon-btn menu-btn" aria-label="Open menu" onClick={() => setMenuOpen(true)}>
+            <Menu size={18} />
           </button>
-          <div className="breadcrumbs">
-            <span>Workspace</span>
-            <span>/</span>
-            <strong>{view}</strong>
+          <div className="topbar-title">
+            <h1 suppressHydrationWarning>{title}</h1>
+            <p suppressHydrationWarning>{subtitle}</p>
           </div>
-          <div className="top-actions">
-            <button className="icon-button" aria-label="Search">
-              <Search size={18} />
+          <div className="topbar-actions">
+            <button type="button" className="searchbox" onClick={() => go("Search")}>
+              <Search size={15} />
+              <span>Search your files</span>
+              <kbd>Ctrl K</kbd>
             </button>
-            <div className="mini-avatar">VB</div>
+            <button type="button" className="icon-btn" onClick={theme.toggle}
+              aria-label={theme.resolved === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              title={theme.resolved === "dark" ? "Light mode" : "Dark mode"}>
+              {theme.resolved === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+            </button>
+            <button type="button" className="btn hide-sm" onClick={() => fileInput.current?.click()} disabled={uploading}>
+              <Upload size={15} /> {uploading ? "Uploading…" : "Upload"}
+            </button>
+            <button type="button" className="btn primary" onClick={newChat} disabled={sending}>
+              <MessageSquare size={15} /> <span className="hide-sm">New chat</span>
+            </button>
           </div>
         </header>
-        <div className="content-grid">
-          <section className="chat-column" aria-busy={isUploading}>
-            <div className="chat-head">
-              <div>
-                <div className="eyebrow">
-                  PERSONAL ASSISTANT <span className="live-pill">LIVE</span>
-                </div>
-                <h1>{view === "Chat" ? "Friday workspace" : view}</h1>
-              </div>
-              <button className="icon-button" aria-label="More actions">
-                <MoreHorizontal size={19} />
-              </button>
-            </div>
-            {error && (
-              <div className="error-banner" role="alert">
-                {error}
-                <button onClick={() => setError("")} aria-label="Dismiss error">
-                  <X size={14} />
-                </button>
-              </div>
-            )}
-            {view === "Chat" ? (
-              <Chat
-                messages={messages}
-                message={message}
-                setMessage={setMessage}
-                onSend={handleSend}
-                isSending={isSending}
-                onAttachFile={() => attachmentInput.current?.click()}
-                onAttachImage={() => imageInput.current?.click()}
-              />
-            ) : (
-              <WorkspaceView
-                view={view}
-                documents={documents}
-                conversations={conversations}
-                events={events}
-                collections={collections}
-                settingsData={settingsData}
-                onSettingsSaved={setSettingsData}
-                onCollectionsChanged={setCollections}
-                onUpload={() => fileInput.current?.click()}
-                onSelectConversation={selectConversation}
-                onNewConversation={newConversation}
-              />
-            )}
-            <input
-              ref={fileInput}
-              hidden
-              type="file"
-              accept=".pdf,.md,.txt,.csv,.png,.jpg,.jpeg,.gif,.webp,.bmp"
-              multiple
-              onChange={(event) => {
-                const files = event.target.files
-                  ? Array.from(event.target.files)
-                  : [];
-                if (files.length) void upload(files);
-                event.target.value = "";
-              }}
-            />
-            <input
-              ref={attachmentInput}
-              hidden
-              type="file"
-              accept=".pdf,.md,.txt,.csv,.png,.jpg,.jpeg,.gif,.webp,.bmp"
-              multiple
-              onChange={(event) => {
-                const files = event.target.files
-                  ? Array.from(event.target.files)
-                  : [];
-                if (files.length) void upload(files);
-                event.target.value = "";
-              }}
-            />
-            <input
-              ref={imageInput}
-              hidden
-              type="file"
-              accept="image/*,.png,.jpg,.jpeg,.gif,.webp,.bmp,.heic,.heif"
-              capture="environment"
-              multiple
-              onChange={(event) => {
-                const selectedFiles = event.target.files
-                  ? Array.from(event.target.files)
-                  : [];
 
-                const imageFiles = selectedFiles.filter(isImageFile);
-                const hasNonImage = selectedFiles.some(
-                  (file) => !isImageFile(file),
-                );
-
-                if (
-                  selectedFiles.length &&
-                  (hasNonImage || imageFiles.length === 0)
-                ) {
-                  setError("Please choose photo files only.");
-                  event.target.value = "";
-                  return;
-                }
-
-                if (imageFiles.length) void upload(imageFiles);
-                event.target.value = "";
-              }}
-            />
-          </section>
-          <ContextPanel
-            documents={documents}
-            settingsData={settingsData}
-            onUpload={() => fileInput.current?.click()}
-          />
-        </div>
-      </section>
-    </main>
-  );
-}
-
-function Chat({
-  messages,
-  message,
-  setMessage,
-  onSend,
-  isSending,
-  onAttachFile,
-  onAttachImage,
-}: {
-  messages: Message[];
-  message: string;
-  setMessage: (value: string) => void;
-  onSend: (event: React.FormEvent<HTMLFormElement>) => void;
-  isSending: boolean;
-  onAttachFile: () => void;
-  onAttachImage: () => void;
-}) {
-  const [copyFeedback, setCopyFeedback] = useState<{
-    id: string;
-    status: "copied" | "failed";
-  } | null>(null);
-
-  async function copyMessage(id: string, content: string) {
-    try {
-      await navigator.clipboard.writeText(content);
-      setCopyFeedback({ id, status: "copied" });
-    } catch {
-      setCopyFeedback({ id, status: "failed" });
-    }
-    window.setTimeout(() => {
-      setCopyFeedback((current) => (current?.id === id ? null : current));
-    }, 1600);
-  }
-
-  return (
-    <>
-      <div className="conversation-meta">
-        <span>
-          {messages.length
-            ? `${messages.length} messages`
-            : "Start a local conversation"}
-        </span>
-        <span className="line" />
-        <span>Friday · local model</span>
-      </div>
-      <div className="messages">
-        {messages.length === 0 && (
-          <div className="empty-or-activity">
-            <div className="activity-icon">
-              <Sparkles size={23} />
-            </div>
-            <h2>Ask Friday anything</h2>
-            <p>
-              Your saved conversations and document sources will appear here.
-            </p>
+        {error && (
+          <div className="banner" role="alert">
+            <span>{error}</span>
+            <button type="button" onClick={() => setError("")} aria-label="Dismiss"><X size={15} /></button>
           </div>
         )}
-        {messages.map((item, index) => {
-          const messageId = `${item.role}-${index}`;
-          const feedback =
-            copyFeedback?.id === messageId ? copyFeedback.status : null;
-          const copyLabel =
-            feedback === "copied"
-              ? "Message copied"
-              : feedback === "failed"
-                ? "Copy failed"
-                : "Copy message";
+        {notice && !error && (
+          <div className="banner info" role="status">
+            <span>{notice}</span>
+            <button type="button" onClick={() => setNotice("")} aria-label="Dismiss"><X size={15} /></button>
+          </div>
+        )}
 
-          return (
-            <div
-              className={`message ${item.role === "user" ? "user-message" : "assistant-message"}`}
-              key={messageId}
-            >
-              <div
-                className={`message-avatar ${item.role === "user" ? "user-avatar" : "assistant-avatar"}`}
-              >
-                {item.role === "user" ? "VB" : <Sparkles size={15} />}
-              </div>
-              <div className="message-content">
-                <div className="message-heading">
-                  <div className="message-author">
-                    {item.role === "user" ? "You" : "Friday"}{" "}
-                    <span>{item.created_at ?? "now"}</span>
+        <div className={`content${view === "Chat" ? " fill" : ""}`}>
+          {view === "Home" && (
+            <Dashboard
+              composer={<Composer {...composerProps} hero placeholder="Ask FRIDAY anything, or drop in a question about your files…" />}
+              conversations={conversations}
+              documents={documents}
+              memories={memories}
+              sessions={sessions}
+              events={events}
+              health={health}
+              collectionsCount={collections.length}
+              onOpenAgent={() => go("Agent")}
+              onOpenDocuments={() => go("Documents")}
+              onOpenActivity={() => go("Activity")}
+            />
+          )}
+
+          {view === "Chat" && (
+            <div className={`chat-layout${messages.length ? "" : " no-rail"}`}>
+              <section className="chat-card" aria-label="Conversation">
+                <ChatHeader title={activeTitle} online={online} />
+                <Thread
+                  messages={messages}
+                  live={sending}
+                  liveStartedAt={liveStartedAt}
+                  livePhrase={livePhrase}
+                  onRetry={(question) => void send(question)}
+                  onStarter={(text) => setDraft(text)}
+                />
+                <div className="dock">
+                  <div className="dock-inner">
+                    <Composer {...composerProps} placeholder={messages.length ? "Reply to FRIDAY…" : "Message FRIDAY…"} autoFocus />
+                    <div className="composer-note">FRIDAY can make mistakes. Check important information against the cited sources.</div>
                   </div>
-                  <button
-                    className="copy-message-button"
-                    type="button"
-                    aria-label={copyLabel}
-                    aria-live="polite"
-                    title={copyLabel}
-                    disabled={!item.content}
-                    onClick={() => void copyMessage(messageId, item.content)}
-                  >
-                    {feedback === "copied" ? (
-                      <Check size={14} />
-                    ) : feedback === "failed" ? (
-                      <X size={14} />
-                    ) : (
-                      <Copy size={14} />
-                    )}
-                  </button>
                 </div>
-                {item.role === "assistant" ? (
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    rehypePlugins={[rehypeHighlight]}
-                    components={{ pre: MarkdownCodeBlock }}
-                  >
-                    {item.content}
-                  </ReactMarkdown>
-                ) : (
-                  <p>{item.content}</p>
-                )}
-              </div>
+              </section>
+              {messages.length > 0 && (
+                <ContextRail message={lastAssistant} settings={settingsData} onOpenMemory={() => go("Memory")} />
+              )}
             </div>
-          );
-        })}
-      </div>
-      <div className="composer-wrap">
-        <form className="composer" onSubmit={onSend}>
-          <span className="composer-prompt" aria-hidden="true">
-            ›
-          </span>
-          <textarea
-            value={message}
-            onChange={(event) => {
-              const field = event.currentTarget;
-              setMessage(field.value);
-              field.style.height = "auto";
-              field.style.height = `${Math.min(field.scrollHeight, 168)}px`;
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                event.currentTarget.form?.requestSubmit();
-              }
-            }}
-            placeholder="Message Friday..."
-            rows={1}
-            disabled={isSending}
-          />
-          <div className="composer-actions">
-            <button
-              type="button"
-              className="icon-button"
-              aria-label="Attach file"
-              onClick={onAttachFile}
-            >
-              <Paperclip size={18} />
-            </button>
-            <button
-              type="button"
-              className="icon-button"
-              aria-label="Attach image"
-              onClick={onAttachImage}
-            >
-              <ImagePlus size={18} />
-            </button>
-            <button
-              className="send-button"
-              type="submit"
-              aria-label="Send message"
-              disabled={isSending || !message.trim()}
-            >
-              <ArrowUp size={17} />
-            </button>
-          </div>
-        </form>
-        <div className="composer-note">
-          {isSending
-            ? "Friday is thinking..."
-            : "Friday can make mistakes. Check important info."}
-        </div>
-      </div>
-    </>
-  );
-}
+          )}
 
-function WorkspaceView({
-  view,
-  documents,
-  conversations,
-  events,
-  collections,
-  settingsData,
-  onSettingsSaved,
-  onCollectionsChanged,
-  onUpload,
-  onSelectConversation,
-  onNewConversation,
-}: {
-  view: View;
-  documents: Document[];
-  conversations: Conversation[];
-  events: ActivityEvent[];
-  collections: Collection[];
-  settingsData?: SettingsData;
-  onSettingsSaved: (settings: SettingsData) => void;
-  onCollectionsChanged: (collections: Collection[]) => void;
-  onUpload: () => void;
-  onSelectConversation: (id: string) => void;
-  onNewConversation: () => void;
-}) {
-  if (view === "Documents" || view === "My library")
-    return (
-      <div className="data-list">
-        <div className="panel-toolbar">
-          <span>{documents.length} documents</span>
-          <button className="primary-button" onClick={onUpload}>
-            <Upload size={15} /> Add files / folder
-          </button>
+          {view === "Agent" && (
+            <div className="agent-shell card">
+              <AgentPanel />
+            </div>
+          )}
+          {view === "Documents" && (
+            <DocumentsView documents={documents} onUpload={() => fileInput.current?.click()}
+              onChanged={() => void loadDocuments().catch(() => undefined)} onError={setError} />
+          )}
+          {view === "Search" && <SearchView />}
+          {view === "Collections" && <CollectionsView collections={collections} onChanged={setCollections} onError={setError} />}
+          {view === "Memory" && (
+            <MemoryView memories={memories} onChanged={() => void loadMemories().catch(() => undefined)} onError={setError} />
+          )}
+          {view === "Activity" && <ActivityView events={events} />}
+          {view === "History" && (
+            <HistoryView conversations={conversations} activeId={conversationId} onSelect={(id) => void openConversation(id)}
+              onNew={newChat} onDelete={(id) => void deleteConversation(id)} />
+          )}
+          {view === "Settings" && (
+            <SettingsView settingsData={settingsData} models={models} themeMode={theme.mode} onTheme={theme.setMode}
+              onSaved={setSettingsData} />
+          )}
         </div>
-        {documents.map((document) => (
-          <div className="data-row" key={document.id}>
-            <FileText size={18} />
-            <div>
-              <strong>{document.name}</strong>
-              <span>
-                {document.type} · {formatSize(document.size)} ·{" "}
-                {document.chunks} chunks · {document.status}
-              </span>
-            </div>
-          </div>
-        ))}
-        {!documents.length && (
-          <Empty
-            text="Add files to give Friday more context."
-            action="Add a document"
-            onClick={onUpload}
-          />
-        )}
-      </div>
-    );
-  if (view === "History")
-    return (
-      <div className="data-list">
-        {conversations.map((conversation) => (
-          <button
-            className="data-row data-row-button"
-            key={conversation.id}
-            onClick={() => onSelectConversation(conversation.id)}
-          >
-            <MessageSquare size={18} />
-            <div>
-              <strong>{conversation.title}</strong>
-              <span>{new Date(conversation.updated_at).toLocaleString()}</span>
-            </div>
-          </button>
-        ))}
-        {!conversations.length && (
-          <Empty
-            text="Your recent conversations will appear here."
-            action="Start a conversation"
-            onClick={onNewConversation}
-          />
-        )}
-      </div>
-    );
-  if (view === "Activity")
-    return (
-      <div className="data-list">
-        {events.map((event) => (
-          <div className="data-row" key={event.id}>
-            <Activity size={18} />
-            <div>
-              <strong>{event.title}</strong>
-              <span>
-                {event.detail || event.type} ·{" "}
-                {new Date(event.created_at).toLocaleString()}
-              </span>
-            </div>
-          </div>
-        ))}
-        {!events.length && (
-          <Empty
-            text="Your local activity will appear here."
-            action="Start a conversation"
-            onClick={onNewConversation}
-          />
-        )}
-      </div>
-    );
-  if (view === "Collections")
-    return (
-      <CollectionsView
-        collections={collections}
-        onChanged={onCollectionsChanged}
+      </main>
+
+      <input
+        ref={fileInput}
+        hidden
+        type="file"
+        multiple
+        accept={UPLOAD_ACCEPT}
+        onChange={(event) => {
+          const files = event.target.files ? Array.from(event.target.files) : [];
+          if (files.length) void upload(files);
+          event.target.value = "";
+        }}
       />
-    );
-  if (view === "Settings")
-    return (
-      <SettingsView settingsData={settingsData} onSaved={onSettingsSaved} />
-    );
-  return (
-    <div className="data-list">
-      <div className="settings-card">
-        <strong>{view}</strong>
-        <span>
-          Configure the local assistant from the API-backed workspace.
-        </span>
-      </div>
     </div>
   );
 }
 
-function CollectionsView({
-  collections,
-  onChanged,
-}: {
-  collections: Collection[];
-  onChanged: (collections: Collection[]) => void;
-}) {
-  const [name, setName] = useState("");
-  async function create() {
-    if (!name.trim()) return;
-    const collection = await api<Collection>("/api/collections", {
-      method: "POST",
-      body: JSON.stringify({ title: name.trim() }),
-    });
-    onChanged([...collections, collection]);
-    setName("");
-  }
-  return (
-    <div className="data-list">
-      <div className="settings-card">
-        <strong>Collections</strong>
-        <span>Organize documents into focused retrieval groups.</span>
-        <div className="inline-form">
-          <input
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="Collection name"
-          />
-          <button className="primary-button" onClick={() => void create()}>
-            <Plus size={15} /> Create
-          </button>
-        </div>
-      </div>
-      {collections.map((collection) => (
-        <div className="data-row" key={collection.id}>
-          <Grid2X2 size={18} />
-          <div>
-            <strong>{collection.name}</strong>
-            <span>{collection.document_count} documents</span>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function SettingsView({
-  settingsData,
-  onSaved,
-}: {
-  settingsData?: SettingsData;
-  onSaved: (settings: SettingsData) => void;
-}) {
-  const [draft, setDraft] = useState<SettingsData | undefined>(
-    () => settingsData,
-  );
-  const currentDraft = draft ?? settingsData;
-
-  if (!currentDraft)
-    return (
-      <div className="data-list">
-        <div className="settings-card">
-          <span>Loading settings...</span>
-        </div>
-      </div>
-    );
-
-  async function save() {
-    const saved = await api<SettingsData>("/api/settings", {
-      method: "PUT",
-      body: JSON.stringify(currentDraft),
-    });
-    onSaved(saved);
-  }
-
-  return (
-    <div className="data-list">
-      <div className="settings-card">
-        <strong>Local assistant settings</strong>
-        <label>
-          Generation model
-          <input
-            value={currentDraft.model}
-            onChange={(event) =>
-              setDraft({ ...currentDraft, model: event.target.value })
-            }
-          />
-        </label>
-        <label>
-          Embedding model
-          <input
-            value={currentDraft.embed_model}
-            onChange={(event) =>
-              setDraft({ ...currentDraft, embed_model: event.target.value })
-            }
-          />
-        </label>
-        <label>
-          Retrieval count
-          <input
-            type="number"
-            min="1"
-            max="20"
-            value={currentDraft.top_k}
-            onChange={(event) =>
-              setDraft({ ...currentDraft, top_k: Number(event.target.value) })
-            }
-          />
-        </label>
-        <label>
-          Similarity limit
-          <input
-            type="number"
-            min="0"
-            max="2"
-            step="0.1"
-            value={currentDraft.max_distance}
-            onChange={(event) =>
-              setDraft({
-                ...currentDraft,
-                max_distance: Number(event.target.value),
-              })
-            }
-          />
-        </label>
-        <label>
-          Temperature
-          <input
-            type="number"
-            min="0"
-            max="2"
-            step="0.1"
-            value={currentDraft.temperature}
-            onChange={(event) =>
-              setDraft({
-                ...currentDraft,
-                temperature: Number(event.target.value),
-              })
-            }
-          />
-        </label>
-        <label>
-          System prompt
-          <textarea
-            rows={5}
-            value={currentDraft.system_prompt}
-            onChange={(event) =>
-              setDraft({ ...currentDraft, system_prompt: event.target.value })
-            }
-          />
-        </label>
-        <button className="primary-button" onClick={() => void save()}>
-          Save settings
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function Empty({
-  text,
-  action,
-  onClick,
-}: {
-  text: string;
-  action: string;
-  onClick: () => void;
-}) {
-  return (
-    <div className="empty-or-activity">
-      <div className="activity-icon">
-        <Activity size={23} />
-      </div>
-      <h2>Nothing here yet</h2>
-      <p>{text}</p>
-      <button className="primary-button" onClick={onClick}>
-        <Plus size={16} /> {action}
-      </button>
-    </div>
-  );
-}
-
-function ContextPanel({
-  documents,
-  settingsData,
-  onUpload,
-}: {
-  documents: Document[];
-  settingsData?: SettingsData;
-  onUpload: () => void;
-}) {
-  return (
-    <aside className="context-panel">
-      <div className="context-heading">
-        <div>
-          <span className="eyebrow">CONTEXT</span>
-          <h2>Workspace details</h2>
-        </div>
-      </div>
-      <div className="context-section">
-        <div className="section-title">
-          Attached sources <span>{documents.length}</span>
-        </div>
-        {documents.slice(0, 4).map((document) => (
-          <div className="document-row" key={document.id}>
-            <div className="doc-icon mint">
-              <FileText size={16} />
-            </div>
-            <div className="doc-info">
-              <strong>{document.name}</strong>
-              <span>
-                {document.type} · {formatSize(document.size)}
-              </span>
-            </div>
-          </div>
-        ))}
-        <button className="upload-button" onClick={onUpload}>
-          <Upload size={15} /> Add files / folder
-        </button>
-      </div>
-      <div className="context-section">
-        <div className="section-title">Search settings</div>
-        <div className="setting-row">
-          <span>Retrieval count</span>
-          <strong>
-            {settingsData ? `${settingsData.top_k} chunks` : "3 chunks"}
-          </strong>
-        </div>
-        <div className="setting-row">
-          <span>Similarity limit</span>
-          <strong>
-            {settingsData
-              ? `${settingsData.max_distance.toFixed(1)} max`
-              : "2.0 max"}
-          </strong>
-        </div>
-        <div className="setting-row">
-          <span>Storage</span>
-          <strong>SQLite</strong>
-        </div>
-        <div className="setting-row">
-          <span>Embeddings</span>
-          <strong>Ollama</strong>
-        </div>
-      </div>
-      <div className="context-footer">
-        <span className="status-dot" /> Your data stays on this device
-      </div>
-    </aside>
-  );
-}

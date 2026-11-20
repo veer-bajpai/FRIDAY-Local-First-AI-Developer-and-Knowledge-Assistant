@@ -86,6 +86,23 @@ def _is_binary(p: Path) -> bool:
     except OSError:
         return True
 
+def read_text_keep(p: Path) -> tuple[str, str]:
+    """Read UTF-8 text with '\n' line endings; also return the file's own newline style."""
+    with open(p, encoding="utf-8", errors="replace", newline="") as handle:
+        raw = handle.read()
+    newline = "\r\n" if "\r\n" in raw else "\n"
+    return raw.replace("\r\n", "\n"), newline
+
+
+def write_text_keep(p: Path, text: str, newline: str = "\n") -> None:
+    """Write UTF-8 text, restoring the file's original newline style (CRLF stays CRLF on Windows)."""
+    data = text.replace("\r\n", "\n")
+    if newline == "\r\n":
+        data = data.replace("\n", "\r\n")
+    with open(p, "w", encoding="utf-8", newline="") as handle:
+        handle.write(data)
+
+
 def _diff(old: str, new: str, name: str) -> str:
     return "".join(difflib.unified_diff(old.splitlines(True), new.splitlines(True),
                                         f"a/{name}", f"b/{name}", n=2))
@@ -98,7 +115,7 @@ async def read_file(a: dict, ctx: Context) -> str:
     if _is_binary(p):
         raise ToolError(f"{a['path']} looks like a binary file.")
     offset, limit = int(a.get("offset", 0) or 0), int(a.get("limit", 2000) or 2000)
-    lines = p.read_text(errors="replace").splitlines()
+    lines = read_text_keep(p)[0].splitlines()
     ctx.read_files.add(p)
     chunk = lines[offset:offset + limit]
     out = "\n".join(f"{i + offset + 1:>5}\t{ln[:2000]}" for i, ln in enumerate(chunk))
@@ -110,7 +127,7 @@ async def read_file(a: dict, ctx: Context) -> str:
 def _write_preview(a: dict, ctx: Context) -> str:
     try:
         p = ctx.resolve(a["path"])
-        old = p.read_text(errors="replace") if p.exists() else ""
+        old = read_text_keep(p)[0] if p.exists() else ""
         return _diff(old, a.get("content", ""), ctx.rel(p)) or "(no changes)"
     except Exception:
         return ""
@@ -120,21 +137,29 @@ async def write_file(a: dict, ctx: Context) -> str:
     existed = p.exists()
     if existed and p not in ctx.read_files:
         raise ToolError(f"{a['path']} already exists. Read it with read_file before overwriting it.")
-    old = p.read_text(errors="replace") if existed else None
+    old, newline = read_text_keep(p) if existed else (None, os.linesep if os.name == "nt" else "\n")
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(a["content"], encoding="utf-8")
+    write_text_keep(p, a["content"], newline if existed else "\n")
     ctx.record_checkpoint(p, old)
     ctx.read_files.add(p)
     return f"{'Overwrote' if existed else 'Created'} {ctx.rel(p)} ({len(a['content'].splitlines())} lines)"
 
 def _edit_apply(a: dict, ctx: Context) -> tuple[Path, str, str]:
+    p, text, new, _ = _edit_plan(a, ctx)
+    return p, text, new
+
+
+def _edit_plan(a: dict, ctx: Context) -> tuple[Path, str, str, str]:
     p = ctx.resolve(a["path"])
     if not p.is_file():
         raise ToolError(f"{a['path']} does not exist. Use write_file to create new files.")
-    old_s, new_s = a["old_string"], a["new_string"]
+    old_s = a["old_string"].replace("\r\n", "\n")
+    new_s = a["new_string"].replace("\r\n", "\n")
     if old_s == new_s:
         raise ToolError("old_string and new_string are identical.")
-    text = p.read_text(errors="replace")
+    if not old_s:
+        raise ToolError("old_string must not be empty. Use write_file to create or replace a whole file.")
+    text, newline = read_text_keep(p)
     n = text.count(old_s)
     if n == 0:
         raise ToolError("old_string was not found. It must match the file exactly, including whitespace. "
@@ -142,7 +167,8 @@ def _edit_apply(a: dict, ctx: Context) -> tuple[Path, str, str]:
     if n > 1 and not a.get("replace_all"):
         raise ToolError(f"old_string appears {n} times. Add surrounding context to make it unique, "
                         "or set replace_all=true.")
-    return p, text, text.replace(old_s, new_s) if a.get("replace_all") else text.replace(old_s, new_s, 1)
+    new = text.replace(old_s, new_s) if a.get("replace_all") else text.replace(old_s, new_s, 1)
+    return p, text, new, newline
 
 def _edit_preview(a: dict, ctx: Context) -> str:
     try:
@@ -155,8 +181,8 @@ async def edit_file(a: dict, ctx: Context) -> str:
     p = ctx.resolve(a["path"])
     if p.is_file() and p not in ctx.read_files:
         raise ToolError(f"Read {a['path']} with read_file before editing it.")
-    p, old, new = _edit_apply(a, ctx)
-    p.write_text(new, encoding="utf-8")
+    p, old, new, newline = _edit_plan(a, ctx)
+    write_text_keep(p, new, newline)
     ctx.record_checkpoint(p, old)
     d = _diff(old, new, ctx.rel(p))
     added = sum(1 for l in d.splitlines() if l.startswith("+") and not l.startswith("+++"))
@@ -176,8 +202,19 @@ async def list_dir(a: dict, ctx: Context) -> str:
 
 async def glob_files(a: dict, ctx: Context) -> str:
     base = ctx.resolve(a.get("path") or ".")
-    hits = [p for p in base.glob(a["pattern"])
-            if p.is_file() and not (set(p.relative_to(ctx.root).parts) & IGNORE_DIRS)]
+    pattern = a["pattern"]
+    if os.path.isabs(pattern) or ".." in Path(pattern).parts:
+        raise ToolError("glob patterns must be relative to the workspace and must not contain '..'.")
+    hits = []
+    for p in base.glob(pattern):
+        try:
+            rel_parts = p.resolve().relative_to(ctx.root).parts
+        except ValueError:
+            continue  # symlink pointing outside the workspace
+        if p.is_file() and not (set(rel_parts) & IGNORE_DIRS):
+            hits.append(p)
+        if len(hits) >= 5000:
+            break
     hits.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     out = "\n".join(ctx.rel(p) for p in hits[:200])
     return out or "No files matched."
@@ -204,7 +241,7 @@ async def grep(a: dict, ctx: Context) -> str:
     for f in files:
         if set(f.relative_to(ctx.root).parts) & IGNORE_DIRS or _is_binary(f):
             continue
-        for i, line in enumerate(f.read_text(errors="replace").splitlines(), 1):
+        for i, line in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
             if rx.search(line):
                 results.append(f"{ctx.rel(f)}:{i}:{line[:300]}")
                 if len(results) >= 300:
@@ -356,3 +393,4 @@ def build_tools(read_only: bool = False) -> dict[str, Tool]:
     if read_only:
         tools = [t for t in tools if t.read_only]
     return {t.name: t for t in tools}
+

@@ -9,7 +9,7 @@ FRIDAY is a local application made of three runtime services and two clients:
 | Part               | Default address          | Responsibility                                                                           |
 | ------------------ | ------------------------ | ---------------------------------------------------------------------------------------- |
 | Next.js web client | `http://localhost:3000`  | Workspace UI, uploads, chat rendering, history, collections, and settings                |
-| FastAPI backend    | `http://localhost:8000`  | API, SQLite persistence, document ingestion, lexical retrieval, and Ollama orchestration |
+| FastAPI backend    | `http://localhost:8000`  | API, SQLite persistence, document ingestion, hybrid retrieval, memory, agent sessions, and Ollama orchestration |
 | Ollama             | `http://localhost:11434` | Local chat generation and optional ingestion embeddings                                  |
 | Browser client     | Uses web client          | Calls the backend over REST and SSE                                                      |
 | Terminal client    | `friday chat`            | Calls the same backend and shares the same conversations and documents                   |
@@ -45,7 +45,7 @@ flowchart LR
     API -->|embeddings and chat| Ollama
 ```
 
-The frontend and terminal client use the same API and persistent data. The backend owns document ingestion, lexical retrieval, conversation persistence, settings, collections, and Ollama requests. The launcher is an operational layer around these components; it does not provide a second API or separate terminal-chat store.
+The frontend and terminal client use the same API and persistent data. The backend owns document ingestion, hybrid retrieval, long-term memory, conversation persistence, settings, collections, and Ollama requests. The launcher is an operational layer around these components; it does not provide a second API or separate terminal-chat store.
 
 ## Runtime Components
 
@@ -102,17 +102,17 @@ sequenceDiagram
     API->>DB: Mark document ready or failed
 ```
 
-PDF text is extracted with `pypdf`. Other non-image files are read as UTF-8 with invalid bytes ignored. Raster image uploads are accepted, but the current ingestion code does not perform OCR or image understanding; they do not become searchable text. Embedding failures do not prevent text chunks from being stored.
+`backend/app/extraction.py` extracts PDF text per page (scanned pages are OCR'd when Tesseract is installed), DOCX/PPTX/XLSX, CSV/TSV, JSON, HTML, text and code. Images go to a local Ollama vision model (`FRIDAY_VISION_MODEL`) and/or OCR; if neither yields content the document is marked `failed` with the reason. Unsupported types are rejected at upload (HTTP 415). Chunks are paragraph-aware with overlap, de-duplicated by content hash, and keep their page number. Embedding failures do not prevent text chunks from being stored. Documents left in `processing` by a crash are re-queued at startup; `POST /api/documents/{id}/reprocess` re-runs extraction.
 
 ### Search and retrieval
 
-Current search is lexical, not vector similarity search:
+Search uses hybrid retrieval:
 
 1. Select ready chunks, optionally constrained to a collection.
 2. Tokenize the query and each chunk and calculate the proportion of unique query tokens found in that chunk.
 3. Sort by score, apply the configured distance filter, and return up to `k` snippets with document metadata.
 
-Embeddings are requested during ingestion and stored in the `chunks.embedding` column when Ollama responds. The current `retrieve()` implementation does not query those embeddings and there is no persistent vector index (HNSW, KD-tree, or otherwise) in this repository. Vector retrieval is a future extension point.
+`backend/app/knowledge.py`: chunks are indexed in an SQLite FTS5 table (BM25, kept in sync by triggers) and their stored Ollama embeddings are served from an in-memory normalised float32 matrix that is rebuilt only when documents change. The two candidate lists are fused with reciprocal-rank fusion, de-duplicated by content hash and filtered by collection or document ids. Results carry document, chunk, page, method (`lexical`/`semantic`/`hybrid`) and score. Without embeddings retrieval is FTS5-only. `main.cpp` contains an isolated C++ vector database prototype; it is not an integration dependency of the FastAPI or Next.js runtime.
 
 ### Chat
 
@@ -125,7 +125,7 @@ sequenceDiagram
 
     Client->>API: POST /api/chat/stream
     API->>DB: Read settings, conversation, and recent messages
-    API->>DB: Retrieve lexical top-k chunks
+    API->>DB: Hybrid top-k chunks + relevant memories
     API->>API: Assemble system prompt, history, sources, and question
     API->>Ollama: POST /api/chat with streaming enabled
     loop Model output
@@ -137,6 +137,15 @@ sequenceDiagram
 ```
 
 The backend retains up to eight recent messages and bounds their combined content to 6,000 characters before sending them to Ollama. The non-streaming `POST /api/chat` endpoint follows the same retrieval and prompt assembly path. Chat requires an available Ollama generation model; the backend returns an error event/fallback when Ollama cannot be reached.
+
+## Coding agent
+
+There are two agent loops:
+
+* `friday_agent/engine.py`: the maintained agent behind `/api/agent/sessions`, used by the terminal console and the browser Agent panel. It has persistent sessions (`friday_agent/session_store.py`), approvals, per-tool timeouts, a guard against repeating identical failing calls, context trimming of old tool output, and a git-aware repository overview (`friday_agent/repo_map.py`).
+* `backend/app/agent/loop.py`: a legacy loop behind `/api/agent/stream`, kept for external clients. It shares the tools and the repository map with the engine. No bundled client uses it.
+
+File tools read and write UTF-8 and keep each file's line endings (CRLF stays CRLF). Paths, globs and symlinks are confined to the workspace.
 
 ## API Surface
 
@@ -150,7 +159,7 @@ The backend retains up to eight recent messages and bounds their combined conten
 | `GET`                    | `/api/documents`                                           | List documents and processing status                              |
 | `POST`                   | `/api/documents/upload`                                    | Upload a file and schedule ingestion; returns `202`               |
 | `GET`, `DELETE`          | `/api/documents/{document_id}`                             | Read or delete a document                                         |
-| `POST`                   | `/api/search`                                              | Lexically rank indexed chunks                                     |
+| `POST`                   | `/api/search`                                              | Hybrid (FTS5 + vector) ranking with source attribution            |
 | `POST`, `GET`            | `/api/conversations`                                       | Create or list conversations                                      |
 | `GET`, `PATCH`, `DELETE` | `/api/conversations/{conversation_id}`                     | Read, rename, or delete a conversation                            |
 | `GET`                    | `/api/activity`                                            | List recent activity events                                       |
@@ -181,7 +190,7 @@ The CLI runs the frontend and backend as local processes. Ollama is detected sep
 | `OLLAMA_URL`             | FastAPI and CLI            | Ollama API base URL; `http://localhost:11434`                                                   |
 | `FRIDAY_MODEL`           | CLI/backend initialization | Generation model; `llama3.2:latest` backend default                                             |
 | `FRIDAY_EMBED_MODEL`     | CLI/backend initialization | Embedding model; `nomic-embed-text:latest` backend default                                      |
-| `FRIDAY_MAX_TOKENS`      | FastAPI backend            | Maximum generated chat tokens; defaults to `128` for faster responses                           |
+| `FRIDAY_MAX_TOKENS`      | FastAPI backend            | Maximum generated chat tokens; defaults to `2048`                                               |
 | `FRIDAY_ALLOWED_ORIGINS` | FastAPI                    | Comma-separated additional CORS origins; known local and deployed frontend origins are retained |
 | `FRIDAY_THEME`           | CLI banner                 | `pink` (default), `cyan`, `orange`, `green`, or `purple`                                        |
 | `FRIDAY_NO_BANNER`       | CLI banner                 | Set to `1` to disable the banner                                                                |
@@ -192,6 +201,7 @@ The launcher reads environment variables from the process environment; it does n
 ## Security and Privacy Notes
 
 - Local use keeps API, SQLite data, uploads, and Ollama traffic on the configured machine/network, but deployment configuration determines actual exposure.
-- The API currently has no authentication or authorization. Do not expose its ports to an untrusted network without adding appropriate access controls.
+- Every request passes `backend/app/security.py`: loopback clients are trusted (`FRIDAY_AUTH=auto`), every other client must send the API token; `FRIDAY_AUTH=required` demands it everywhere. Host headers are checked (DNS-rebinding protection), requests are rate- and size-limited, and agent routes additionally require a local client or token. Bypass mode needs `FRIDAY_ALLOW_BYPASS=1`. See [operations.md](operations.md).
 - CORS is a browser policy, not authentication.
 - Chat prompts and retrieved document text are sent to the configured `OLLAMA_URL`; use a trusted local or explicitly configured Ollama service.
+

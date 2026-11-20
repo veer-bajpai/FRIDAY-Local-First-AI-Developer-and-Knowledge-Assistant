@@ -12,3 +12,4 @@ ollama pull nomic-embed-text
 ollama pull llama3.2:1b
 
 ./db
+

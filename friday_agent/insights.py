@@ -1,37 +1,58 @@
-"""Build a small local dark report from the agent's tool usage log."""
+"""Generate a local HTML activity report for Friday agent sessions."""
 from __future__ import annotations
 
-import collections
 import html
 import json
+from collections import Counter
 from pathlib import Path
+from typing import Any
 
-from .config import HOME
 
-
-def build_report(root: Path) -> Path:
+def _usage_entries(root: Path) -> list[dict[str, Any]]:
     log = root / ".friday" / "usage.jsonl"
-    rows = []
-    if log.exists():
-        for line in log.read_text(encoding="utf-8").splitlines():
+    entries: list[dict[str, Any]] = []
+    if not log.is_file():
+        return entries
+    try:
+        for line in log.read_text(encoding="utf-8", errors="replace").splitlines()[-5000:]:
             try:
-                rows.append(json.loads(line))
+                item = json.loads(line)
+                if isinstance(item, dict):
+                    entries.append(item)
             except json.JSONDecodeError:
                 continue
-    counts = collections.Counter(row.get("tool", "unknown") for row in rows)
-    failures = collections.Counter(row.get("tool", "unknown") for row in rows if not row.get("ok", True))
-    body = "".join(
-        f"<tr><td>{html.escape(name)}</td><td>{count}</td><td>{failures[name]}</td></tr>"
-        for name, count in counts.most_common()
-    )
-    output = HOME / "insights.html"
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
-        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\">"
-        "<title>Friday insights</title><style>body{background:#101214;color:#bbc2cb;font:15px ui-monospace,monospace;padding:2rem}"
-        "h1{color:#8b9aa8}table{border-collapse:collapse}td,th{padding:.55rem 1rem;border-bottom:1px solid #343a40;text-align:left}</style>"
-        f"<h1>Friday insights</h1><p>{len(rows)} recorded tool calls</p>"
-        f"<table><thead><tr><th>Tool</th><th>Calls</th><th>Errors</th></tr></thead><tbody>{body}</tbody></table></html>",
-        encoding="utf-8",
-    )
-    return output
+    except OSError:
+        pass
+    return entries
+
+
+def build_report(root: str | Path) -> Path:
+    workspace = Path(root).expanduser().resolve()
+    output_dir = workspace / ".friday"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    report = output_dir / "insights.html"
+    entries = _usage_entries(workspace)
+    counts = Counter(str(item.get("tool", "unknown")) for item in entries)
+    successes = sum(1 for item in entries if item.get("ok"))
+    total = len(entries)
+
+    rows = "".join(
+        f"<tr><td>{html.escape(tool)}</td><td>{count}</td></tr>"
+        for tool, count in counts.most_common()
+    ) or "<tr><td colspan=\"2\">No tool activity recorded.</td></tr>"
+    document = f"""<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>FRIDAY Insights</title>
+<style>body{{font-family:system-ui,sans-serif;max-width:900px;margin:3rem auto;padding:0 1.5rem;color:#20232a}}table{{border-collapse:collapse;width:100%}}th,td{{border-bottom:1px solid #ddd;padding:.6rem;text-align:left}}.stats{{display:flex;gap:2rem}}.stats div{{font-size:1.2rem}}</style>
+</head>
+<body>
+<h1>FRIDAY Agent Insights</h1>
+<p>Workspace: <code>{html.escape(str(workspace))}</code></p>
+<div class="stats"><div><strong>{total}</strong><br>tool calls</div><div><strong>{successes}</strong><br>successful calls</div></div>
+<h2>Tool usage</h2><table><thead><tr><th>Tool</th><th>Calls</th></tr></thead><tbody>{rows}</tbody></table>
+</body>
+</html>
+"""
+    report.write_text(document, encoding="utf-8")
+    return report
+

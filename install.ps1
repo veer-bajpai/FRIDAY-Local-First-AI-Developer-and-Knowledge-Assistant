@@ -97,3 +97,4 @@ Ok "FRIDAY is installed. Open a NEW terminal and run:"
 Write-Host "  friday browser    run in your browser"
 Write-Host "  friday chat       run in this terminal"
 Write-Host "  friday            choose a mode"
+

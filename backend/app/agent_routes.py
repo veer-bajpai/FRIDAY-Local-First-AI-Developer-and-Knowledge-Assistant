@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import logging
 import json
+import os
 import webbrowser
 from pathlib import Path
 from typing import Literal
@@ -16,19 +18,27 @@ from pydantic import BaseModel, Field
 from friday_agent.config import DEFAULT_MODEL, MAX_STEPS, MODES, NUM_CTX, load_custom_commands
 from friday_agent.engine import (
     AgentSession, compact_session, context_report, create_session, rewind,
-    run_turn, undo,
+    run_turn, undo, warm_session,
 )
+from friday_agent import session_store
 from friday_agent.insights import build_report
 from friday_agent.mcp_client import MCPManager
-from friday_agent.llm import list_models
+from friday_agent.llm import LLMError, _same_model, list_models, resolve_model
 from friday_agent.tools import register_external_tools
 from friday_agent.voice import listen
 
+log = logging.getLogger("friday.agent")
 router = APIRouter()
+MCP_STATUS: dict = {"status": "not_started", "servers": [], "errors": {}}
 SESSIONS: dict[str, AgentSession] = {}
 MCP_MANAGER: MCPManager | None = None
 MAX_SESSIONS = 32
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+PERSIST_PATH = Path(os.getenv("FRIDAY_DATA_DIR", "./data")) / "agent_sessions.json"  # legacy metadata file
+
+
+def _store_dir() -> Path:
+    return PERSIST_PATH.parent / "agent_sessions"
 
 
 def _project_root() -> Path:
@@ -42,24 +52,51 @@ PROJECT_ROOT = _project_root()
 
 
 def require_local_agent_request(request: Request) -> None:
+    """Agent tools touch the filesystem and shell: only this machine (or a token holder) may use them."""
+    from .security import is_trusted_client, presented_token, token_valid
+
+    has_token = token_valid(presented_token(request))
     origin = request.headers.get("origin")
-    if origin:
+    if origin and not has_token:
         parsed = urlsplit(origin)
         if parsed.scheme not in {"http", "https"} or parsed.hostname not in LOCAL_HOSTS:
             raise HTTPException(status_code=403, detail="Agent access is restricted to local browsers.")
 
     host = request.client.host if request.client else ""
-    try:
-        is_local = ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        is_local = False
-    if not is_local:
+    if not (is_trusted_client(host) or has_token):
         raise HTTPException(status_code=403, detail="Agent access is restricted to this machine.")
 
 
+def _check_mode_allowed(mode: str) -> None:
+    if mode not in MODES:
+        raise HTTPException(status_code=422, detail=f"Mode must be one of: {', '.join(MODES)}")
+    if mode == "bypass" and os.getenv("FRIDAY_ALLOW_BYPASS", "").lower() not in {"1", "true", "yes"}:
+        raise HTTPException(
+            status_code=403,
+            detail="Bypass mode skips approvals and is disabled. Set FRIDAY_ALLOW_BYPASS=1 to enable it locally.",
+        )
+
+
+def _validate_project_root(raw: str) -> Path:
+    try:
+        candidate = Path(raw).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=f"Project path is invalid: {exc}") from exc
+    if not candidate.is_dir():
+        raise HTTPException(status_code=422, detail="Project path must be an existing directory.")
+    if candidate == Path(candidate.anchor) or candidate == Path.home().resolve():
+        raise HTTPException(status_code=422, detail="Choose a project folder, not a drive root or your home folder.")
+    return candidate
+
+
 class CreateSessionRequest(BaseModel):
+    resume_id: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9]+$")
     model: str | None = Field(default=None, max_length=120)
     mode: str = Field(default="default", max_length=32)
+    project_root: str | None = Field(default=None, max_length=2048)
+    # Optional, used by the terminal: "auto" sends tool schemas only when a prompt needs them.
+    tool_routing: str | None = Field(default=None, pattern=r"^(auto|always|never)$")
+    warm_up: bool = False  # load the model and cache the system prompt in the background
 
 
 class TurnRequest(BaseModel):
@@ -67,7 +104,9 @@ class TurnRequest(BaseModel):
 
 
 class ModeRequest(BaseModel):
-    mode: str = Field(min_length=1, max_length=32)
+    mode: str | None = Field(default=None, min_length=1, max_length=32)
+    model: str | None = Field(default=None, min_length=1, max_length=120, pattern=r"^[A-Za-z0-9_.:/@-]+$")
+    tool_routing: str | None = Field(default=None, pattern=r"^(auto|always|never)$")
 
 
 class ApprovalRequest(BaseModel):
@@ -78,19 +117,56 @@ class RewindRequest(BaseModel):
     count: int = Field(default=1, ge=1, le=100)
 
 
-@router.on_event("startup")
 async def start_mcp_servers() -> None:
-    global MCP_MANAGER
+    global MCP_MANAGER, MCP_STATUS
+    if MCP_MANAGER is not None:
+        return
+    _restore_sessions()
+    log.info("restored %d agent session(s)", len(SESSIONS))
     manager = MCPManager(PROJECT_ROOT / ".friday" / "mcp.json")
-    await manager.start()
+    try:
+        await manager.start()
+        errors = getattr(manager, "errors", {})
+        MCP_STATUS = {"status": "degraded" if errors else "ok", "servers": sorted(manager.sessions),
+                      "errors": errors}
+    except Exception as exc:  # optional integration: FRIDAY keeps running without it
+        MCP_STATUS = {"status": "error", "servers": [], "errors": {"mcp": str(exc)}}
+        log.warning("MCP integrations unavailable: %s", exc)
     register_external_tools(manager.tools)
     MCP_MANAGER = manager
 
 
-@router.on_event("shutdown")
 async def stop_mcp_servers() -> None:
-    if MCP_MANAGER is not None:
-        await MCP_MANAGER.close()
+    global MCP_MANAGER
+    if MCP_MANAGER is None:
+        return
+    for session in list(SESSIONS.values()):
+        for future in session.pending_approvals.values():
+            if not future.done():
+                future.set_result("deny")  # never leave a tool waiting; nothing is auto-approved
+        session.save()
+    manager, MCP_MANAGER = MCP_MANAGER, None
+    try:
+        await manager.close()
+    except Exception as exc:
+        log.warning("MCP shutdown error: %s", exc)
+
+
+def agent_health() -> dict:
+    store = _store_dir()
+    try:
+        store.mkdir(parents=True, exist_ok=True)
+        writable = os.access(store, os.W_OK)
+    except OSError:
+        writable = False
+    return {
+        "status": "ok" if writable else "error",
+        "sessions": len(SESSIONS),
+        "busy": sum(1 for s in SESSIONS.values() if s.busy),
+        "awaiting_approval": sum(1 for s in SESSIONS.values() if s.pending_approvals),
+        "store_writable": writable,
+        "mcp": MCP_STATUS,
+    }
 
 
 def _session_or_404(session_id: str) -> AgentSession:
@@ -98,6 +174,79 @@ def _session_or_404(session_id: str) -> AgentSession:
     if session is None:
         raise HTTPException(status_code=404, detail="Agent session not found.")
     return session
+
+
+def _attach(session: AgentSession) -> AgentSession:
+    """Register a session, wire durable persistence and the inter-session message runner."""
+    directory = _store_dir()
+    session.persist = lambda item: session_store.save(item, directory)
+    owner = session
+
+    async def send_message(target: str, text: str) -> str:
+        if len(text) > 1000:
+            raise ValueError("Session messages are limited to 1000 characters.")
+        matches = [item for item in SESSIONS.values()
+                   if item.id != owner.id and (item.id == target or item.id.startswith(target))]
+        if len(matches) != 1:
+            raise ValueError("Target must uniquely identify another active agent session.")
+        matches[0].inbox.append({"from": owner.id[:8], "text": text})
+        return f"Message delivered to {matches[0].id[:8]}."
+
+    session.context.session_message_runner = send_message
+    SESSIONS[session.id] = session
+    return session
+
+
+def _persist_sessions() -> None:
+    """Save every live session (full transcript, todos, checkpoints, status)."""
+    for session in list(SESSIONS.values()):
+        session.save()
+
+
+def _restore_sessions() -> None:
+    restored = 0
+    for session in session_store.load_all(_store_dir()):
+        if len(SESSIONS) >= MAX_SESSIONS:
+            break
+        _attach(session)
+        restored += 1
+    # Migrate the old metadata-only file once: those sessions have no transcript to resume.
+    try:
+        if PERSIST_PATH.exists():
+            payload = json.loads(PERSIST_PATH.read_text(encoding="utf-8"))
+            for item in payload if isinstance(payload, list) else []:
+                sid = str(item.get("id") or "")
+                root = Path(str(item.get("root", ""))).expanduser()
+                if not sid or sid in SESSIONS or not root.is_dir() or len(SESSIONS) >= MAX_SESSIONS:
+                    continue
+                session = create_session(root, item.get("model") or DEFAULT_MODEL, item.get("mode") or "default")
+                session.id = sid
+                if isinstance(item.get("usage"), dict):
+                    session.usage = item["usage"]
+                _attach(session).save()
+            PERSIST_PATH.rename(PERSIST_PATH.with_suffix(".json.migrated"))
+    except (OSError, json.JSONDecodeError, ValueError, RuntimeError):
+        pass
+
+
+_WARM_TASKS: set[asyncio.Task] = set()
+
+
+def _start_warm_up(session: AgentSession) -> None:
+    """Pre-load the model and system prompt without delaying the response."""
+    async def run() -> None:
+        try:
+            timings = await warm_session(session)
+            if timings:
+                log.info("warm-up %s model=%s load=%.2fs prompt=%s tok in %.2fs", session.id[:8], session.model,
+                         (timings.get("load_duration") or 0) / 1e9, timings.get("prompt_eval_count"),
+                         (timings.get("prompt_eval_duration") or 0) / 1e9)
+        except Exception as exc:  # warm-up is an optimisation only
+            log.debug("warm-up failed: %s", exc)
+
+    task = asyncio.create_task(run())
+    _WARM_TASKS.add(task)
+    task.add_done_callback(_WARM_TASKS.discard)
 
 
 def _session_payload(session: AgentSession) -> dict:
@@ -112,6 +261,11 @@ def _session_payload(session: AgentSession) -> dict:
         "max_steps": MAX_STEPS,
         "num_ctx": NUM_CTX,
         "usage": session.usage,
+        "status": session.status,
+        "last_error": session.last_error,
+        "messages": len(session.messages) - 1,
+        "resumable": len(session.messages) > 1,
+        "tool_routing": session.tool_routing,
     }
 
 
@@ -150,40 +304,72 @@ async def agent_insights() -> dict[str, str]:
 
 @router.post("/api/agent/sessions", dependencies=[Depends(require_local_agent_request)])
 async def create_agent_session(body: CreateSessionRequest) -> dict:
-    if body.mode not in MODES:
-        raise HTTPException(status_code=422, detail=f"Mode must be one of: {', '.join(MODES)}")
+    _check_mode_allowed(body.mode)
+    if body.resume_id:
+        existing = SESSIONS.get(body.resume_id)
+        if existing is None:
+            # Not in memory (evicted, or the app started without the startup hook): try disk.
+            loaded = session_store.load_one(body.resume_id, _store_dir())
+            if loaded is not None and len(SESSIONS) < MAX_SESSIONS:
+                existing = _attach(loaded)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="That agent session no longer exists.")
+        if body.tool_routing:
+            existing.tool_routing = body.tool_routing
+        if body.warm_up:
+            _start_warm_up(existing)
+        return _session_payload(existing)
     available = [session_id for session_id, session in SESSIONS.items() if not session.busy]
     while len(SESSIONS) >= MAX_SESSIONS and available:
-        SESSIONS.pop(available.pop(0), None)
+        evicted = SESSIONS.pop(available.pop(0), None)
+        if evicted is not None:
+            evicted.save()  # evicted from memory only; stays resumable on disk after restart
     if len(SESSIONS) >= MAX_SESSIONS:
         raise HTTPException(status_code=503, detail="All agent session slots are busy.")
+    root = PROJECT_ROOT
+    if body.project_root:
+        root = _validate_project_root(body.project_root)
+    model, note = body.model, None
+    if not model:
+        try:
+            model, note = await resolve_model(DEFAULT_MODEL, purpose="agent")
+        except LLMError as exc:
+            model, note = DEFAULT_MODEL, str(exc)  # Ollama offline: create anyway, the turn reports it
     try:
-        session = create_session(PROJECT_ROOT, body.model, body.mode)
+        session = create_session(root, model, body.mode)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    SESSIONS[session.id] = session
-    owner = session
-
-    async def send_message(target: str, text: str) -> str:
-        if len(text) > 1000:
-            raise ValueError("Session messages are limited to 1000 characters.")
-        matches = [item for item in SESSIONS.values()
-                   if item.id != owner.id and (item.id == target or item.id.startswith(target))]
-        if len(matches) != 1:
-            raise ValueError("Target must uniquely identify another active agent session.")
-        matches[0].inbox.append({"from": owner.id[:8], "text": text})
-        return f"Message delivered to {matches[0].id[:8]}."
-
-    session.context.session_message_runner = send_message
-    return _session_payload(session)
+    if body.tool_routing:
+        session.tool_routing = body.tool_routing
+    _attach(session).save()
+    if body.warm_up:
+        _start_warm_up(session)
+    return {**_session_payload(session), "model_note": note}
 
 
 @router.get("/api/agent/sessions", dependencies=[Depends(require_local_agent_request)])
 async def list_agent_sessions() -> list[dict]:
     return [
-        {"id": session.id[:8], "workspace": session.root.name, "busy": session.busy, "mode": session.mode}
+        {"id": session.id[:8], "full_id": session.id, "workspace": session.root.name, "busy": session.busy,
+         "mode": session.mode, "status": session.status, "title": session_store._session_title(session),
+         "messages": len(session.messages) - 1}
         for session in SESSIONS.values()
     ]
+
+
+@router.get("/api/agent/sessions/{session_id}/history", dependencies=[Depends(require_local_agent_request)])
+async def agent_session_history(session_id: str, limit: int = 200) -> dict:
+    """Conversation and tool activity for a session, so clients can show and resume it."""
+    session = _session_or_404(session_id)
+    shown = []
+    for message in session.messages[1:][-max(1, min(limit, 1000)):]:
+        item = {"role": message.get("role"), "content": str(message.get("content", ""))[:8000]}
+        if message.get("tool_name"):
+            item["tool"] = message["tool_name"]
+        if message.get("tool_calls"):
+            item["tool_calls"] = [(call.get("function") or {}).get("name") for call in message["tool_calls"]]
+        shown.append(item)
+    return {**_session_payload(session), "history": shown, "tool_log": session.tool_log[-50:]}
 
 
 @router.get("/api/agent/sessions/{session_id}", dependencies=[Depends(require_local_agent_request)])
@@ -196,9 +382,24 @@ async def update_agent_session(session_id: str, body: ModeRequest) -> dict:
     session = _session_or_404(session_id)
     if session.busy:
         raise HTTPException(status_code=409, detail="Wait for the current turn to finish before changing modes.")
-    if body.mode not in MODES:
-        raise HTTPException(status_code=422, detail=f"Mode must be one of: {', '.join(MODES)}")
-    session.permissions.mode = body.mode
+    if body.mode is None and body.model is None and body.tool_routing is None:
+        raise HTTPException(status_code=422, detail="Send a mode, a model or tool_routing to change.")
+    if body.tool_routing is not None:
+        session.tool_routing = body.tool_routing
+    if body.model is not None:
+        try:
+            installed = await list_models()
+        except Exception:  # Ollama offline: cannot confirm the model exists
+            installed = []
+        match = next((name for name in installed if _same_model(name, body.model)), None)
+        if match is None:
+            available = ", ".join(installed) or "none (is Ollama running?)"
+            raise HTTPException(status_code=422, detail=f"Model '{body.model}' is not installed. Installed: {available}")
+        session.model = match
+    if body.mode is not None:
+        _check_mode_allowed(body.mode)
+        session.permissions.mode = body.mode
+    session.save()
     return _session_payload(session)
 
 
@@ -215,11 +416,14 @@ async def agent_turn(session_id: str, body: TurnRequest) -> StreamingResponse:
         body.prompt = f"{prefix}\n\n{body.prompt}"
 
     async def events():
+        session.turn_task = asyncio.current_task()
         try:
             async for event in run_turn(session, body.prompt, reserved=True):
                 yield "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
         finally:
+            session.turn_task = None
             session.busy = False
+            session.save()
 
     return StreamingResponse(
         events(),
@@ -238,7 +442,29 @@ async def approve_tool_call(session_id: str, approval_id: str, body: ApprovalReq
     if future is None or future.done():
         raise HTTPException(status_code=404, detail="Approval request is no longer pending.")
     future.set_result(body.decision)
+    session.save()
     return {"approved": body.decision != "deny", "decision": body.decision}
+
+
+@router.post("/api/agent/sessions/{session_id}/cancel", dependencies=[Depends(require_local_agent_request)])
+async def cancel_agent_turn(session_id: str) -> dict:
+    """Stop the running turn: cancels the model request (Ollama stops generating) and any tool wait."""
+    session = _session_or_404(session_id)
+    if not session.busy:
+        return {"cancelled": False, "status": session.status, "busy": False}
+    for future in session.pending_approvals.values():
+        if not future.done():
+            future.set_result("deny")
+    task = session.turn_task
+    if task is not None and not task.done():
+        task.cancel()
+    for _ in range(50):  # wait up to 5 s for the turn to unwind so the next prompt is not refused
+        if not session.busy:
+            break
+        await asyncio.sleep(0.1)
+    if session.busy and task is None:
+        session.busy = False  # the stream ended without running its cleanup; release the session
+    return {"cancelled": True, "status": session.status, "busy": session.busy}
 
 
 @router.post("/api/agent/sessions/{session_id}/undo", dependencies=[Depends(require_local_agent_request)])
@@ -250,6 +476,7 @@ async def undo_agent_change(session_id: str) -> dict:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    session.save()
     return {"message": message, "undo_count": len(session.context.checkpoints)}
 
 
@@ -262,6 +489,7 @@ async def rewind_agent_turn(session_id: str, body: RewindRequest) -> dict:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    session.save()
     return {"rewound": labels, "undo_count": len(session.context.checkpoints)}
 
 
@@ -275,6 +503,7 @@ async def compact_agent_session(session_id: str) -> dict:
     session = _session_or_404(session_id)
     try:
         summary = await compact_session(session)
+        session.save()
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
@@ -288,4 +517,6 @@ async def delete_agent_session(session_id: str) -> dict:
     if session.busy:
         raise HTTPException(status_code=409, detail="Finish or stop the active turn before closing this session.")
     SESSIONS.pop(session_id, None)
+    session_store.delete(session_id, _store_dir())
     return {"deleted": True}
+

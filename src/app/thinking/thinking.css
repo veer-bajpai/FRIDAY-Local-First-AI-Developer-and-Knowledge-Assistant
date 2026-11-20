@@ -1,0 +1,153 @@
+:root {
+  --think-fg: var(--muted);
+  --think-shine: var(--text);
+  --think-orb-a: var(--accent-2);
+  --think-orb-b: var(--accent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --think-fg: var(--muted);
+    --think-shine: var(--text);
+    --think-orb-a: var(--accent-2);
+    --think-orb-b: var(--accent);
+  }
+}
+
+.think-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+  padding: 2px 0;
+  color: var(--think-fg);
+  font-size: 13px;
+}
+
+.think-orb-wrap {
+  position: relative;
+  display: inline-block;
+  flex: 0 0 18px;
+  width: 18px;
+  height: 26px;
+}
+
+.think-orb {
+  position: absolute;
+  top: 0;
+  left: 1px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 35% 30%,
+    var(--think-orb-a),
+    var(--think-orb-b)
+  );
+  box-shadow: 0 0 12px color-mix(in srgb, var(--think-orb-b) 60%, transparent);
+  animation: think-float 2.4s ease-in-out infinite;
+}
+
+.think-orb-shadow {
+  position: absolute;
+  bottom: 0;
+  left: 3px;
+  width: 12px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.18;
+  animation: think-shadow 2.4s ease-in-out infinite;
+}
+
+.think-phrase-slot {
+  display: inline-grid;
+  min-width: 11.5rem;
+}
+
+.think-phrase {
+  grid-area: 1 / 1;
+  background: linear-gradient(
+    90deg,
+    var(--think-fg) 0%,
+    var(--think-fg) 40%,
+    var(--think-shine) 50%,
+    var(--think-fg) 60%,
+    var(--think-fg) 100%
+  );
+  background-size: 250% 100%;
+  background-clip: text;
+  color: transparent;
+  -webkit-background-clip: text;
+  animation:
+    think-sweep 1.8s linear infinite,
+    think-fade-in 350ms ease both;
+}
+
+.think-timer {
+  color: var(--think-fg);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.think-done {
+  min-height: 24px;
+  padding: 4px 0;
+  color: var(--think-fg);
+  font-size: 12px;
+}
+
+@keyframes think-float {
+  0%,
+  100% {
+    transform: translateY(6px);
+  }
+  50% {
+    transform: translateY(0);
+  }
+}
+
+@keyframes think-shadow {
+  0%,
+  100% {
+    transform: scaleX(0.6);
+    opacity: 0.08;
+  }
+  50% {
+    transform: scaleX(1);
+    opacity: 0.2;
+  }
+}
+
+@keyframes think-sweep {
+  from {
+    background-position: 150% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+
+@keyframes think-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .think-orb,
+  .think-orb-shadow,
+  .think-phrase {
+    animation: none;
+  }
+
+  .think-phrase {
+    background: none;
+    color: var(--think-fg);
+  }
+}
+

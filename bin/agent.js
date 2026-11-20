@@ -294,7 +294,7 @@ async function start({ api, args = [] }) {
 
   const printPrompt = () =>
     process.stdout.write(
-      `${color(theme.accent, "🐺 BOSS")} ${mode === "plan" ? color(theme.muted, "[plan] ") : ""}${color(theme.muted, "❯ ")}`,
+      `${color(theme.accent, "FRIDAY")} ${mode === "plan" ? color(theme.muted, "[plan] ") : ""}${color(theme.muted, "> ")}`,
     );
   const processLine = async (raw) => {
     const line = raw.trim();
@@ -349,10 +349,11 @@ async function start({ api, args = [] }) {
     return ok ? 0 : 1;
   }
 
+  console.log(color(theme.accent, `\nFRIDAY / AGENT WORKSTATION`));
   console.log(
     color(
       theme.muted,
-      `\nLocal coding session · ${session.model} · ${session.workspace}`,
+      `session=${session.id.slice(0, 8)}  model=${session.model}  workspace=${session.workspace}  mode=${mode}`,
     ),
   );
   console.log(
