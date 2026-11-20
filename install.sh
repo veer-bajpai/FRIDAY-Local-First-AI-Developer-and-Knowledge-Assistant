@@ -91,7 +91,7 @@ esac
 node_ok || die "Node.js 20+ was not found after installation."
 find_python >/dev/null || die "Python 3.11+ was not found after installation."
 have git || die "Git was not found after installation."
-have ollama || warn "Ollama is not on PATH; chat needs Ollama installed from https://ollama.com."
+have ollama || warn "Ollama is not on PATH; the coding agent needs Ollama from https://ollama.com."
 
 SCRIPT_DIR=""
 if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
@@ -130,8 +130,7 @@ info "Setting up FRIDAY (dependencies, build, and AI models)…"
 echo
 ok "FRIDAY is installed. Open a new terminal and run:"
 echo "  friday browser    run in your browser"
-echo "  friday chat       run in this terminal"
-echo "  friday            choose a mode"
+echo "  friday agent      run the coding agent"
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *) echo "If 'friday' is not found, add to your shell profile: export PATH=\"$BIN_DIR:\$PATH\"" ;;

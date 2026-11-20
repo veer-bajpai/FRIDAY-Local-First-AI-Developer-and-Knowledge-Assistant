@@ -15,7 +15,6 @@ from typing import Any, AsyncIterator
 import httpx
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 PROJECT_ROOT = next(
@@ -38,14 +37,12 @@ from .security import SecurityMiddleware
 from .agent_routes import router as agent_router, start_mcp_servers, stop_mcp_servers
 from .agent.router import router as coding_agent_router
 from friday_agent.config import (
-    CHAT_MAX_TOKENS,
     DEFAULT_EMBED_MODEL,
     DEFAULT_MODEL,
-    NUM_CTX,
     OLLAMA_KEEP_ALIVE,
     OLLAMA_TIMEOUT_SECONDS,
 )
-from friday_agent.llm import LLMError, chat_stream as llm_chat_stream, installed_models, resolve_model
+from friday_agent.llm import installed_models
 
 
 configure_logging()
@@ -60,18 +57,8 @@ OLLAMA_URL = os.getenv(
     "http://localhost:11434"
 ).rstrip("/")
 OLLAMA_TIMEOUT = httpx.Timeout(OLLAMA_TIMEOUT_SECONDS, connect=5.0)
-OLLAMA_MAX_TOKENS = CHAT_MAX_TOKENS
 MAX_UPLOAD_BYTES = int(os.getenv("FRIDAY_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
 ollama_client: httpx.AsyncClient | None = None
-
-LEGACY_SYSTEM_PROMPT = """You are FRIDAY, a local-first developer assistant.
-Use concise Markdown. Put every code sample in a fenced Markdown code block with a language tag.
-Prefer headings and lists when useful. Never put code in an unfenced paragraph."""
-PREVIOUS_SYSTEM_PROMPT = "You are FRIDAY. Answer concisely in Markdown. Fence code samples with a language tag."
-CURRENT_SYSTEM_PROMPT = "You are FRIDAY. Answer directly and concisely. Do not include code, code blocks, or programming examples unless the user explicitly asks for code or asks a programming-related question. When code is relevant, use concise Markdown and fenced code blocks with a language tag."
-SYSTEM_PROMPT = """You are FRIDAY, a local-first personal assistant with a feminine-voiced presence. Be poised, perceptive, warm, and quietly confident, with light dry wit when it fits. Stay concise and reassuring without flirtation, exaggerated mannerisms, or gender stereotypes. Do not claim to be human or to have personal feelings or experiences. Address the user as Boss only when it feels natural, and do not overuse it.
-
-Answer directly. Do not include code, code blocks, or programming examples unless the user explicitly asks for code or asks a programming-related question. When code is relevant, use concise Markdown and fenced code blocks with a language tag."""
 
 
 # ============================================================
@@ -167,20 +154,6 @@ async def database_busy(request: _Request, exc: sqlite3.OperationalError) -> _JS
 # REQUEST MODELS
 # ============================================================
 
-class ChatRequest(BaseModel):
-    question: str = Field(
-        min_length=1,
-        max_length=4000
-    )
-    k: int | None = Field(
-        default=None,
-        ge=1,
-        le=20
-    )
-    conversation_id: str | None = None
-    collection_id: str | None = None
-
-
 class SearchRequest(BaseModel):
     query: str = Field(
         min_length=1,
@@ -203,24 +176,12 @@ class TitleRequest(BaseModel):
 
 
 class SettingsUpdate(BaseModel):
-    model: str | None = Field(default=None, max_length=120, pattern=r"^[A-Za-z0-9_.:/@-]+$")
     embed_model: str | None = Field(default=None, max_length=120, pattern=r"^[A-Za-z0-9_.:/@-]+$")
-    top_k: int | None = Field(
-        default=None,
-        ge=1,
-        le=20
-    )
     max_distance: float | None = Field(
         default=None,
         ge=0,
         le=2
     )
-    temperature: float | None = Field(
-        default=None,
-        ge=0,
-        le=2
-    )
-    system_prompt: str | None = Field(default=None, max_length=8000)
 
 
 # ============================================================
@@ -279,23 +240,6 @@ def initialize() -> None:
             pass
         connection.executescript(
             """
-            CREATE TABLE IF NOT EXISTS conversations (
-                id TEXT PRIMARY KEY,
-                title TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                conversation_id TEXT NOT NULL
-                    REFERENCES conversations(id)
-                    ON DELETE CASCADE,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-
             CREATE TABLE IF NOT EXISTS documents (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -354,14 +298,7 @@ def initialize() -> None:
             """
         )
 
-        defaults = {
-            "model": DEFAULT_MODEL,
-            "embed_model": DEFAULT_EMBED_MODEL,
-            "top_k": "3",
-            "max_distance": "2",
-            "temperature": "0.2",
-            "system_prompt": SYSTEM_PROMPT,
-        }
+        defaults = {"embed_model": DEFAULT_EMBED_MODEL, "max_distance": "2"}
 
         connection.executemany(
             """
@@ -371,21 +308,6 @@ def initialize() -> None:
             defaults.items()
         )
         knowledge.migrate(connection)
-        connection.execute(
-            """
-            UPDATE settings
-            SET value = ?
-            WHERE key = 'system_prompt' AND value IN (?, ?, ?)
-            """,
-            (
-                SYSTEM_PROMPT,
-                LEGACY_SYSTEM_PROMPT,
-                PREVIOUS_SYSTEM_PROMPT,
-                CURRENT_SYSTEM_PROMPT,
-            )
-        )
-
-
 async def startup() -> None:
     global ollama_client
     initialize()
@@ -429,19 +351,10 @@ def get_settings() -> dict[str, Any]:
             )
         }
 
-    values["top_k"] = int(
-        values["top_k"]
-    )
-
-    values["max_distance"] = float(
-        values["max_distance"]
-    )
-
-    values["temperature"] = float(
-        values["temperature"]
-    )
-
-    return values
+    return {
+        "embed_model": values.get("embed_model", DEFAULT_EMBED_MODEL),
+        "max_distance": float(values.get("max_distance", "2")),
+    }
 
 
 # ============================================================
@@ -772,12 +685,12 @@ async def deep_health() -> dict[str, Any]:
     else:
         def has(name: str) -> bool:
             return any(name == m or f"{name}:latest" == m for m in models)
-        chat_ok = has(current.get("model", DEFAULT_MODEL))
+        agent_model_ok = has(DEFAULT_MODEL)
         embed_ok = has(current.get("embed_model", DEFAULT_EMBED_MODEL))
         checks["ollama"] = {
-            "status": "ok" if chat_ok and embed_ok else "degraded",
+            "status": "ok" if agent_model_ok and embed_ok else "degraded",
             "models": len(models),
-            "chat_model": {"name": current.get("model"), "installed": chat_ok},
+            "agent_model": {"name": DEFAULT_MODEL, "installed": agent_model_ok},
             "embed_model": {"name": current.get("embed_model"), "installed": embed_ok},
         }
     checks["agent"] = agent_health()
@@ -800,75 +713,6 @@ def root() -> dict[str, str]:
 
 
 # ============================================================
-# STATUS
-# ============================================================
-
-@app.get("/api/status")
-async def status() -> dict[str, Any]:
-
-    ollama = "offline"
-
-    try:
-
-        async with httpx.AsyncClient(
-            timeout=5
-        ) as client:
-
-            response = await client.get(
-                f"{OLLAMA_URL}/api/tags"
-            )
-
-            response.raise_for_status()
-
-            ollama = "online"
-
-    except Exception:
-        pass
-
-    with db() as connection:
-        count = connection.execute(
-            "SELECT COUNT(*) FROM documents"
-        ).fetchone()[0]
-
-    current = get_settings()
-
-    return {
-        "ollama": ollama,
-        "embedding_model": current["embed_model"],
-        "generation_model": current["model"],
-        "documents": count,
-    }
-
-
-# ============================================================
-# MODELS
-# ============================================================
-
-@app.get("/api/models")
-async def models() -> dict[str, Any]:
-
-    try:
-
-        async with httpx.AsyncClient(
-            timeout=10
-        ) as client:
-
-            response = await client.get(
-                f"{OLLAMA_URL}/api/tags"
-            )
-
-            response.raise_for_status()
-
-            return response.json()
-
-    except Exception:
-
-        return {
-            "models": []
-        }
-
-
-# ============================================================
 # SETTINGS API
 # ============================================================
 
@@ -884,7 +728,7 @@ async def update_settings(
 ) -> dict[str, Any]:
     installed = await installed_models(force=True)
     if installed is not None:  # only validate when Ollama can be asked
-        for field_name in ("model", "embed_model"):
+        for field_name in ("embed_model",):
             value = getattr(request, field_name)
             if value and not any(value == m or f"{value}:latest" == m for m in installed):
                 raise HTTPException(422, f"Model '{value}' is not installed. Run: ollama pull {value}")
@@ -1167,171 +1011,6 @@ async def search(
             ) * 1000,
             2
         ),
-    }
-
-
-# ============================================================
-# CONVERSATIONS
-# ============================================================
-
-@app.post("/api/conversations")
-def create_conversation(
-    request: TitleRequest = TitleRequest(
-        title="New conversation"
-    )
-) -> dict[str, Any]:
-
-    conversation = {
-        "id": str(uuid.uuid4()),
-        "title": request.title,
-        "created_at": timestamp(),
-        "updated_at": timestamp(),
-    }
-
-    with db() as connection:
-
-        connection.execute(
-            """
-            INSERT INTO conversations(id, title, created_at, updated_at)
-            VALUES (?, ?, ?, ?)
-            """,
-            tuple(
-                conversation.values()
-            )
-        )
-
-    return {
-        **conversation,
-        "messages": []
-    }
-
-
-@app.get("/api/conversations")
-def list_conversations() -> list[dict[str, Any]]:
-
-    with db() as connection:
-
-        rows = connection.execute(
-            """
-            SELECT *
-            FROM conversations
-            ORDER BY updated_at DESC
-            """
-        ).fetchall()
-
-    return [
-        dict(row)
-        for row in rows
-    ]
-
-
-@app.get(
-    "/api/conversations/{conversation_id}"
-)
-def get_conversation(
-    conversation_id: str
-) -> dict[str, Any]:
-
-    with db() as connection:
-
-        conversation = connection.execute(
-            """
-            SELECT id, title, created_at, updated_at
-            FROM conversations
-            WHERE id = ?
-            """,
-            (conversation_id,)
-        ).fetchone()
-
-        messages = connection.execute(
-            """
-            SELECT role, content, created_at
-            FROM messages
-            WHERE conversation_id = ?
-            ORDER BY id
-            """,
-            (conversation_id,)
-        ).fetchall()
-
-    if not conversation:
-        raise HTTPException(
-            404,
-            "Conversation not found"
-        )
-
-    return {
-        **dict(conversation),
-        "messages": [
-            dict(message)
-            for message in messages
-        ],
-    }
-
-
-@app.patch(
-    "/api/conversations/{conversation_id}"
-)
-def rename_conversation(
-    conversation_id: str,
-    request: TitleRequest
-) -> dict[str, str]:
-
-    with db() as connection:
-
-        cursor = connection.execute(
-            """
-            UPDATE conversations
-            SET
-                title = ?,
-                updated_at = ?
-            WHERE id = ?
-            """,
-            (
-                request.title,
-                timestamp(),
-                conversation_id
-            )
-        )
-
-    if cursor.rowcount == 0:
-
-        raise HTTPException(
-            404,
-            "Conversation not found"
-        )
-
-    return {
-        "id": conversation_id,
-        "title": request.title
-    }
-
-
-@app.delete(
-    "/api/conversations/{conversation_id}"
-)
-def delete_conversation(
-    conversation_id: str
-) -> dict[str, bool]:
-
-    with db() as connection:
-
-        cursor = connection.execute(
-            """
-            DELETE FROM conversations
-            WHERE id = ?
-            """,
-            (conversation_id,)
-        )
-
-    if cursor.rowcount == 0:
-
-        raise HTTPException(
-            404,
-            "Conversation not found"
-        )
-
-    return {
-        "deleted": True
     }
 
 
@@ -1643,267 +1322,6 @@ def delete_memory(memory_id: str) -> dict[str, bool]:
         raise HTTPException(404, "Memory not found")
     activity("memory", "Memory deleted", memory_id)
     return {"deleted": True}
-
-
-async def build_chat_messages(
-    request: "ChatRequest", current: dict[str, Any], history: list[sqlite3.Row]
-) -> tuple[list[dict[str, str]], list[dict[str, Any]], list[dict[str, Any]]]:
-    """System prompt + relevant memories + history + question with attributed local sources."""
-    query_vector = await embedding(request.question, current["embed_model"])
-    sources = await retrieve(
-        request.question,
-        request.k or current["top_k"],
-        request.collection_id,
-        current.get("max_distance"),
-        query_vector=query_vector,
-    )
-    with db() as connection:
-        memories = knowledge.relevant_memories(connection, request.question, query_vector)
-
-    system = current["system_prompt"]
-    if memories:
-        system += "\n\nThings the user asked you to remember (use only when relevant):\n" + "\n".join(
-            f"- {memory['content']}" for memory in memories
-        )
-    if sources:
-        context = "\n\n".join(
-            f"[{index}] {knowledge.source_label(source)}\n{source['content'][:1500]}"
-            for index, source in enumerate(sources, 1)
-        )
-        prompt = (
-            "Use these local sources when relevant and cite them as [n]. "
-            "If they do not answer the question, say so.\n"
-            f"{context}\n\nQuestion: {request.question}"
-        )
-    else:
-        prompt = request.question
-    messages = [{"role": "system", "content": system}, *recent_history(history), {"role": "user", "content": prompt}]
-    return messages, sources, memories
-
-
-def recent_history(rows: list[sqlite3.Row]) -> list[dict[str, str]]:
-    selected: list[dict[str, str]] = []
-    remaining_chars = 6000
-
-    for row in rows:
-        if len(selected) >= 8 or remaining_chars <= 0:
-            break
-
-        content = row["content"][-remaining_chars:]
-        selected.append({"role": row["role"], "content": content})
-        remaining_chars -= len(content)
-
-    return list(reversed(selected))
-
-class GenerationError(Exception):
-    """Raised when no answer could be generated; the message is safe to show to the user."""
-
-
-async def generate_tokens(messages: list[dict[str, str]], current: dict[str, Any], meta: dict[str, Any]):
-    """Stream answer tokens from Ollama with model fallback and clear failure messages.
-
-    ``meta`` is filled with the model actually used and any fallback note.
-    """
-    try:
-        model, note = await resolve_model(current["model"])
-    except LLMError as exc:
-        raise GenerationError(str(exc)) from exc
-    meta.update(model=model, note=note)
-    options = {"temperature": current["temperature"], "num_ctx": NUM_CTX}
-    if OLLAMA_MAX_TOKENS > 0:
-        options["num_predict"] = OLLAMA_MAX_TOKENS
-    try:
-        async for chunk in llm_chat_stream(model, messages, options=options):
-            token = (chunk.get("message") or {}).get("content", "")
-            if token:
-                yield token
-            if chunk.get("done"):
-                meta["done_reason"] = chunk.get("done_reason")
-                break
-    except LLMError as exc:
-        raise GenerationError(str(exc)) from exc
-
-
-def save_exchange(conversation_id: str, question: str, answer: str) -> str:
-    created = timestamp()
-    with db() as connection:
-        connection.executemany(
-            "INSERT INTO messages(conversation_id, role, content, created_at) VALUES (?, ?, ?, ?)",
-            [(conversation_id, "user", question, created), (conversation_id, "assistant", answer, created)],
-        )
-        connection.execute(
-            """
-            UPDATE conversations
-            SET title = CASE WHEN title = 'New conversation' THEN ? ELSE title END, updated_at = ?
-            WHERE id = ?
-            """,
-            (question[:60], created, conversation_id),
-        )
-    return created
-
-
-def load_conversation(request: "ChatRequest") -> tuple[str, bool, list[sqlite3.Row]]:
-    created_conversation = request.conversation_id is None
-    conversation_id = request.conversation_id or str(create_conversation()["id"])
-    with db() as connection:
-        conversation = connection.execute(
-            "SELECT id FROM conversations WHERE id = ?", (conversation_id,)
-        ).fetchone()
-        history = connection.execute(
-            "SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT 8",
-            (conversation_id,),
-        ).fetchall()
-    if not conversation:
-        raise HTTPException(404, "Conversation not found")
-    return conversation_id, created_conversation, history
-
-
-def discard_empty_conversation(conversation_id: str) -> None:
-    with db() as connection:
-        has_messages = connection.execute(
-            "SELECT 1 FROM messages WHERE conversation_id = ? LIMIT 1", (conversation_id,)
-        ).fetchone()
-        if not has_messages:
-            connection.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
-
-
-@app.post("/api/chat")
-async def chat(
-    request: ChatRequest
-) -> dict[str, Any]:
-    started = time.perf_counter()
-    current = get_settings()
-    conversation_id, created_conversation, history = load_conversation(request)
-
-    remembered = knowledge.parse_remember(request.question)
-    if remembered:
-        memory = await store_memory(remembered, source=f"conversation:{conversation_id}")
-        answer = f"Noted. I'll remember: {memory['content']}"
-        created = save_exchange(conversation_id, request.question, answer)
-        return {"answer": answer, "sources": [], "memories": [memory], "conversation_id": conversation_id,
-                "created_at": created, "model": None}
-
-    messages, sources, memories = await build_chat_messages(request, current, history)
-    meta: dict[str, Any] = {}
-    try:
-        answer = "".join([token async for token in generate_tokens(messages, current, meta)]).strip()
-    except GenerationError as exc:
-        if created_conversation:
-            discard_empty_conversation(conversation_id)
-        activity("chat", "Chat failed", str(exc), "error")
-        log.warning("chat failed: %s", exc)
-        raise HTTPException(503, str(exc)) from exc
-    answer = answer or "The model returned an empty response."
-    created = save_exchange(conversation_id, request.question, answer)
-    activity("chat", "Conversation updated", request.question[:80],
-             duration_ms=(time.perf_counter() - started) * 1000)
-    return {
-        "answer": answer,
-        "sources": sources,
-        "memories": memories,
-        "conversation_id": conversation_id,
-        "created_at": created,
-        "model": meta.get("model"),
-        "note": meta.get("note"),
-    }
-
-
-# ============================================================
-# STREAMING CHAT
-# ============================================================
-
-def sse(payload: dict[str, Any]) -> str:
-    return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
-
-
-@app.post(
-    "/api/chat/stream"
-)
-async def chat_stream(
-    request: ChatRequest
-) -> StreamingResponse:
-    """Server-sent events: {meta} once, {token} per model token, then {done} or {error}.
-
-    Tokens are forwarded as Ollama produces them (real model streaming, not a buffered reply).
-    If the client disconnects, the partial answer is saved marked as stopped.
-    """
-    started = time.perf_counter()
-    current = get_settings()
-    conversation_id, created_conversation, history = load_conversation(request)
-    remembered = knowledge.parse_remember(request.question)
-
-    async def events():
-        answer_parts: list[str] = []
-        finished = False
-        try:
-            if remembered:
-                memory = await store_memory(remembered, source=f"conversation:{conversation_id}")
-                answer = f"Noted. I'll remember: {memory['content']}"
-                yield sse({"meta": {"model": None, "memory": memory}})
-                yield sse({"token": answer})
-                save_exchange(conversation_id, request.question, answer)
-                finished = True
-                yield sse({"done": True, "conversation_id": conversation_id, "sources": [], "memories": [memory]})
-                return
-
-            messages, sources, memories = await build_chat_messages(request, current, history)
-            meta: dict[str, Any] = {}
-            tokens = generate_tokens(messages, current, meta)
-            first = True
-            async for token in tokens:
-                if first:
-                    yield sse({"meta": {"model": meta.get("model"), "note": meta.get("note"),
-                                        "sources": len(sources), "memories": len(memories)}})
-                    first = False
-                answer_parts.append(token)
-                yield sse({"token": token})
-
-            answer = "".join(answer_parts).strip() or "The model returned an empty response."
-            if meta.get("done_reason") == "length":
-                answer += "\n\n_[Reply reached the FRIDAY_MAX_TOKENS limit.]_"
-            save_exchange(conversation_id, request.question, answer)
-            finished = True
-            activity("chat", "Conversation updated", request.question[:80],
-                     duration_ms=(time.perf_counter() - started) * 1000)
-            yield sse({
-                "done": True,
-                "conversation_id": conversation_id,
-                "sources": sources,
-                "memories": memories,
-                "model": meta.get("model"),
-                "note": meta.get("note"),
-                "truncated": meta.get("done_reason") == "length",
-            })
-        except GenerationError as exc:
-            if answer_parts:
-                save_exchange(conversation_id, request.question,
-                              "".join(answer_parts).strip() + "\n\n_[Response interrupted: " + str(exc) + "]_")
-                finished = True
-            elif created_conversation:
-                discard_empty_conversation(conversation_id)
-            activity("chat", "Streaming chat failed", str(exc), "error")
-            log.warning("streaming chat failed: %s", exc)
-            yield sse({"error": str(exc), "conversation_id": conversation_id if answer_parts else None})
-        except Exception as exc:  # unexpected server error: report, never leak a traceback
-            log.exception("streaming chat crashed")
-            if created_conversation and not answer_parts:
-                discard_empty_conversation(conversation_id)
-            yield sse({"error": f"FRIDAY hit an internal error: {type(exc).__name__}"})
-        finally:
-            if not finished and answer_parts:
-                # client disconnected (Stop button / closed tab): keep what was generated
-                save_exchange(conversation_id, request.question, "".join(answer_parts).strip() + "\n\n_[stopped]_")
-            elif not finished and created_conversation:
-                discard_empty_conversation(conversation_id)
-
-    return StreamingResponse(
-        events(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        }
-    )
 
 
 # ============================================================

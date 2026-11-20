@@ -1,9 +1,4 @@
-"""Friday Browser contract: the API fields the browser dashboard and sidebar read.
-
-The terminal console (Friday Chat) shares the agent session API with the browser.
-These tests fail if a terminal-side change alters a field the browser depends on,
-so the Chat redesign cannot silently break the Dashboard.
-"""
+"""Friday Browser contract: the API fields the browser dashboard and sidebar read."""
 from __future__ import annotations
 
 from pathlib import Path

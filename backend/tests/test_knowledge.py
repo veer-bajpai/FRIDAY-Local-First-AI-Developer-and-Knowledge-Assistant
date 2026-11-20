@@ -1,7 +1,6 @@
 """Hybrid retrieval, attribution, filtering, dedup, index invalidation and long-term memory."""
 from __future__ import annotations
 
-import asyncio
 import io
 import sqlite3
 
@@ -67,8 +66,8 @@ def test_vector_index_is_cached_until_bumped(api):
         assert index._matrix is not built
 
 
-def test_memory_crud_and_chat_injection(api):
-    client, main = api
+def test_memory_crud(api):
+    client, _ = api
     created = client.post("/api/memories", json={"content": "My favourite editor is VS Code", "kind": "preference"})
     assert created.status_code == 201
     memory = created.json()
@@ -77,10 +76,6 @@ def test_memory_crud_and_chat_injection(api):
     assert [m["content"] for m in listed] == ["My favourite editor is VS Code"]
     found = client.get("/api/memories", params={"q": "which editor do I like"}).json()
     assert found and found[0]["id"] == memory["id"]
-
-    request = main.ChatRequest(question="Which editor should I configure?")
-    messages, _, memories = asyncio.run(main.build_chat_messages(request, main.get_settings(), []))
-    assert memories and "VS Code" in messages[0]["content"]
 
     updated = client.patch(f"/api/memories/{memory['id']}", json={"content": "Favourite editor: Neovim"}).json()
     assert updated["content"] == "Favourite editor: Neovim"
@@ -92,11 +87,6 @@ def test_chunking_and_remember_parsing():
     text = "\n\n".join(f"para {i} " + "word " * 100 for i in range(6))
     chunks = knowledge.chunk_text(text, words=220, overlap=40)
     assert len(chunks) >= 3 and all(len(c.split()) <= 260 for c in chunks)
-    assert knowledge.parse_remember("remember: I deploy on Fridays") == "I deploy on Fridays"
-    assert knowledge.parse_remember("/remember use tabs") == "use tabs"
-    assert knowledge.parse_remember("do you remember the plan?") is None
-
-
 def test_migration_upgrades_old_database(tmp_path):
     connection = sqlite3.connect(tmp_path / "old.db")
     connection.executescript("""

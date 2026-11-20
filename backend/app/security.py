@@ -135,8 +135,6 @@ class RateLimiter:
 
 def _bucket(path: str, method: str) -> tuple[str, int]:
     limit = lambda name, default: int(os.getenv(f"FRIDAY_RATE_{name}", str(default)))  # noqa: E731
-    if method == "POST" and path.startswith("/api/chat"):
-        return "chat", limit("CHAT", 30)
     if path.startswith("/api/documents/upload"):
         return "upload", limit("UPLOAD", 20)
     if method == "POST" and path.endswith("/turns"):

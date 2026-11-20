@@ -387,13 +387,5 @@ def relevant_memories(connection: sqlite3.Connection, query: str, query_vector: 
     return [{**memory_view(row), "score": round(score, 3)} for score, row in scored[:limit]]
 
 
-REMEMBER_PATTERN = re.compile(r"^\s*(?:/remember|remember(?:\s+that)?\s*:)\s*(.+)$", re.I | re.S)
-
-
-def parse_remember(text: str) -> str | None:
-    match = REMEMBER_PATTERN.match(text)
-    return match.group(1).strip() if match else None
-
-
 EmbedFn = Callable[[str], Any]
 

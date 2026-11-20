@@ -16,7 +16,8 @@ const mono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "FRIDAY · Local AI workspace",
-  description: "A local-first personal assistant for documents, memory, chat and coding tasks.",
+  description:
+    "A local-first workspace for browsing knowledge and running an approval-based coding agent.",
   icons: { icon: "/favicon.svg" },
 };
 
@@ -29,7 +30,11 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="en" className={`${sans.variable} ${mono.variable} h-full antialiased`} suppressHydrationWarning>
+    <html
+      lang="en"
+      className={`${sans.variable} ${mono.variable} h-full antialiased`}
+      suppressHydrationWarning
+    >
       <body suppressHydrationWarning className="min-h-full">
         {children}
         <Script id="theme-bootstrap" strategy="beforeInteractive">
@@ -39,4 +44,3 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     </html>
   );
 }
-

@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { API, apiErrorMessage } from "../ui/api";
 
 export type AgentStatus = "idle" | "thinking" | "streaming" | "done";
 export type AgentTodo = { content: string; status: string };
@@ -207,7 +206,9 @@ export function useAgent() {
         setStatus("done");
         if (event.todos) setTodos(event.todos);
         if (event.status === "failed")
-          setNotice("The task stopped with an error. Send another message to continue.");
+          setNotice(
+            "The task stopped with an error. Send another message to continue.",
+          );
         break;
     }
   }
@@ -270,7 +271,9 @@ export function useAgent() {
         // the backend no longer knows this session (deleted or evicted): start over
         sessionRef.current = "";
         storeSession(null);
-        throw new Error("That agent session expired. Run the task again to start a new session.");
+        throw new Error(
+          "That agent session expired. Run the task again to start a new session.",
+        );
       }
       if (!response.ok) {
         throw new Error(await responseError(response, "Agent request failed"));
@@ -297,9 +300,7 @@ export function useAgent() {
       if (finalEvent) handleEvent(finalEvent);
     } catch (reason) {
       if (!(reason instanceof Error && reason.name === "AbortError")) {
-        appendError(
-          reason instanceof Error ? reason.message : "Agent request failed.",
-        );
+        appendError(apiErrorMessage(reason, "Agent request failed."));
       }
     } finally {
       abortRef.current = null;
@@ -338,11 +339,7 @@ export function useAgent() {
         ),
       );
     } catch (reason) {
-      appendError(
-        reason instanceof Error
-          ? reason.message
-          : "Approval could not be submitted.",
-      );
+      appendError(apiErrorMessage(reason, "Approval could not be submitted."));
     }
   }
 
@@ -363,9 +360,9 @@ export function useAgent() {
     setNotice("");
     setStatus("idle");
     if (id) {
-      await fetch(`${API}/api/agent/sessions/${id}`, { method: "DELETE" }).catch(
-        () => undefined,
-      );
+      await fetch(`${API}/api/agent/sessions/${id}`, {
+        method: "DELETE",
+      }).catch(() => undefined);
     }
   }
 
@@ -394,10 +391,21 @@ export function useAgent() {
         setTodos(data.todos ?? []);
         const restored: AgentItem[] = [];
         data.history.forEach((entry, index) => {
-          if (entry.role === "user" && !entry.content.startsWith("[system note]")) {
-            restored.push({ key: `h-${index}`, kind: "text", content: `**You:** ${entry.content}` });
+          if (
+            entry.role === "user" &&
+            !entry.content.startsWith("[system note]")
+          ) {
+            restored.push({
+              key: `h-${index}`,
+              kind: "text",
+              content: `**You:** ${entry.content}`,
+            });
           } else if (entry.role === "assistant" && entry.content.trim()) {
-            restored.push({ key: `h-${index}`, kind: "text", content: entry.content });
+            restored.push({
+              key: `h-${index}`,
+              kind: "text",
+              content: entry.content,
+            });
           } else if (entry.role === "tool") {
             restored.push({
               key: `h-${index}`,
@@ -412,10 +420,13 @@ export function useAgent() {
         itemSequence.current = restored.length + 1;
         setItems(restored);
         if (data.status === "interrupted")
-          setNotice("The previous task was interrupted (nothing was replayed). Send a message to continue it.");
+          setNotice(
+            "The previous task was interrupted (nothing was replayed). Send a message to continue it.",
+          );
         else if (data.status === "failed" && data.last_error)
           setNotice(`Last task failed: ${data.last_error}`);
-        else if (restored.length) setNotice("Resumed your previous agent session.");
+        else if (restored.length)
+          setNotice("Resumed your previous agent session.");
       } catch {
         /* backend offline: the session stays stored for next time */
       }
@@ -426,6 +437,15 @@ export function useAgent() {
     };
   }, []);
 
-  return { items, todos, status, run, decide, stop, reset, notice, restoredRoot };
+  return {
+    items,
+    todos,
+    status,
+    run,
+    decide,
+    stop,
+    reset,
+    notice,
+    restoredRoot,
+  };
 }
-

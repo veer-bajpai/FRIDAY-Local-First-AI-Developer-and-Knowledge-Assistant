@@ -2,15 +2,6 @@
 
 export const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-export type Source = {
-  title: string;
-  chunk: number;
-  page?: number | null;
-  score?: number;
-  method?: string;
-  file_type?: string;
-  document_id?: string;
-};
 export type Memory = {
   id: string;
   content: string;
@@ -20,19 +11,6 @@ export type Memory = {
   updated_at: string;
   score?: number;
 };
-export type Step = { label: string; state: "live" | "done" | "error" };
-export type Message = {
-  role: "user" | "assistant";
-  content: string;
-  created_at?: string;
-  sources?: Source[];
-  memories?: Memory[];
-  note?: string;
-  model?: string | null;
-  steps?: Step[];
-  elapsedMs?: number;
-  failed?: boolean;
-};
 export type Document = {
   id: string;
   name: string;
@@ -41,12 +19,6 @@ export type Document = {
   chunks: number;
   status: string;
   error?: string | null;
-};
-export type Conversation = {
-  id: string;
-  title: string;
-  updated_at: string;
-  created_at?: string;
 };
 export type ActivityEvent = {
   id: number;
@@ -58,12 +30,8 @@ export type ActivityEvent = {
 };
 export type Collection = { id: string; name: string; document_count: number };
 export type SettingsData = {
-  model: string;
   embed_model: string;
-  top_k: number;
   max_distance: number;
-  temperature: number;
-  system_prompt: string;
 };
 export type AgentSessionSummary = {
   id: string;
@@ -82,7 +50,7 @@ export type Health = {
     database?: Check & { documents?: number };
     ollama?: Check & {
       models?: number;
-      chat_model?: { name?: string; installed?: boolean };
+      agent_model?: { name?: string; installed?: boolean };
       embed_model?: { name?: string; installed?: boolean };
       error?: string;
     };
@@ -107,7 +75,10 @@ export const UPLOAD_ACCEPT =
   ".pdf,.md,.markdown,.txt,.csv,.tsv,.json,.html,.htm,.docx,.pptx,.xlsx,.py,.js,.ts,.tsx,.jsx,.java,.go,.rs,.c,.cpp,.cs,.rb,.php,.sql,.sh,.ps1,.css,.yaml,.yml,.toml,.png,.jpg,.jpeg,.gif,.webp,.bmp,.tif,.tiff";
 
 /** Turn a failed response into the backend's human-readable message. */
-export async function errorMessage(response: Response, fallback = "Request failed") {
+export async function errorMessage(
+  response: Response,
+  fallback = "Request failed",
+) {
   const text = await response.text().catch(() => "");
   try {
     const parsed = JSON.parse(text) as { detail?: unknown };
@@ -117,16 +88,31 @@ export async function errorMessage(response: Response, fallback = "Request faile
   } catch {
     /* not JSON */
   }
-  if (response.status === 429) return "Too many requests. Wait a moment and try again.";
-  if (response.status === 401) return "The FRIDAY API needs an access token for this connection.";
+  if (response.status === 429)
+    return "Too many requests. Wait a moment and try again.";
+  if (response.status === 401)
+    return "The FRIDAY API needs an access token for this connection.";
   return text || `${fallback} (${response.status})`;
+}
+
+export function apiErrorMessage(reason: unknown, fallback = "Request failed") {
+  if (reason instanceof TypeError && /fetch|network/i.test(reason.message)) {
+    return `Cannot reach the FRIDAY API at ${API}. Start it with "friday browser" or "friday agent".`;
+  }
+  return reason instanceof Error ? reason.message : fallback;
 }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers ?? {});
   const hasBody = init?.body !== undefined && !(init.body instanceof FormData);
-  if (hasBody && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-  const response = await fetch(`${API}${path}`, { ...init, headers });
+  if (hasBody && !headers.has("Content-Type"))
+    headers.set("Content-Type", "application/json");
+  let response: Response;
+  try {
+    response = await fetch(`${API}${path}`, { ...init, headers });
+  } catch (reason) {
+    throw new Error(apiErrorMessage(reason));
+  }
   if (!response.ok) throw new Error(await errorMessage(response));
   return response.json();
 }
@@ -147,12 +133,10 @@ export function timeAgo(iso?: string) {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
   if (seconds < 172800) return "Yesterday";
-  return new Date(iso).toLocaleDateString("en-US", { day: "numeric", month: "short" });
-}
-
-export function clock(ms: number) {
-  const seconds = Math.floor(ms / 1000);
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+  return new Date(iso).toLocaleDateString("en-US", {
+    day: "numeric",
+    month: "short",
+  });
 }
 
 /** Counts per day for the last `days` days (oldest first). */
@@ -169,4 +153,3 @@ export function perDay(dates: string[], days = 14) {
   }
   return buckets;
 }
-

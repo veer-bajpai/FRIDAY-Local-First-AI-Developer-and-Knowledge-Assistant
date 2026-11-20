@@ -1,207 +1,86 @@
 # FRIDAY Architecture
 
-This document describes the implementation in this repository. It distinguishes current behavior from extension points so planned vector search is not mistaken for an implemented feature.
-
-## Working model
-
-FRIDAY is a local application made of three runtime services and two clients:
-
-| Part               | Default address          | Responsibility                                                                           |
-| ------------------ | ------------------------ | ---------------------------------------------------------------------------------------- |
-| Next.js web client | `http://localhost:3000`  | Workspace UI, uploads, chat rendering, history, collections, and settings                |
-| FastAPI backend    | `http://localhost:8000`  | API, SQLite persistence, document ingestion, hybrid retrieval, memory, agent sessions, and Ollama orchestration |
-| Ollama             | `http://localhost:11434` | Local chat generation and optional ingestion embeddings                                  |
-| Browser client     | Uses web client          | Calls the backend over REST and SSE                                                      |
-| Terminal client    | `friday chat`            | Calls the same backend and shares the same conversations and documents                   |
-
-The recommended operational path is:
-
-1. Install from the `main` branch using `install.ps1` or `install.sh`.
-2. Run `friday setup` once. This installs npm and Python dependencies, builds the frontend, starts/checks Ollama, and pulls `llama3.2` plus `nomic-embed-text`.
-3. Run `friday browser` for the web UI or `friday chat` for terminal chat.
-4. The launcher starts the backend and production Next.js server, waits for the frontend, and opens the browser unless `--no-open` is used.
-5. Stop the managed services with `Ctrl+C`. Data remains under `~/.friday/data` unless `FRIDAY_DATA_DIR` is set.
-
-The direct GitHub installer only works after the installer and launcher files have been committed to the repository's `main` branch. It is a bootstrap script, not a packaged executable or offline installer.
-
-## System Context
-
-```mermaid
-flowchart LR
-    User[User]
-    Browser[Next.js web client<br/>localhost:3000]
-    Terminal[friday CLI and terminal chat]
-    API[FastAPI backend<br/>localhost:8000]
-    DB[(SQLite database)]
-    Files[(Uploaded files)]
-    Ollama[Ollama<br/>localhost:11434]
-
-    User --> Browser
-    User --> Terminal
-    Browser -->|REST and SSE| API
-    Terminal -->|REST and SSE| API
-    API --> DB
-    API --> Files
-    API -->|embeddings and chat| Ollama
-```
-
-The frontend and terminal client use the same API and persistent data. The backend owns document ingestion, hybrid retrieval, long-term memory, conversation persistence, settings, collections, and Ollama requests. The launcher is an operational layer around these components; it does not provide a second API or separate terminal-chat store.
+FRIDAY has two user-facing clients: Browser for documents and workspace data, and the coding agent for project work. There is no standalone conversation UI or terminal chat client.
 
 ## Runtime Components
 
-### Web client
+| Component       | Default address          | Responsibility                                                                    |
+| --------------- | ------------------------ | --------------------------------------------------------------------------------- |
+| Next.js Browser | `http://localhost:3000`  | Documents, search, collections, memories, activity, settings, and the Agent panel |
+| FastAPI         | `http://localhost:8000`  | Document ingestion, retrieval, persistence, health, and agent sessions            |
+| Ollama          | `http://localhost:11434` | Agent model calls and optional embeddings/vision processing                       |
+| Friday Agent    | `friday agent`           | Terminal coding-agent console connected to the local API                          |
 
-- Next.js App Router application under `src/app/`.
-- The main workspace in `src/app/page.tsx` calls the FastAPI API using `NEXT_PUBLIC_API_URL`; for local browser use it falls back to `http://localhost:8000`.
-- Chat uses `POST /api/chat/stream` and renders server-sent events (SSE) as tokens arrive.
-- The UI includes chat, document upload, activity, conversation history, collections, and settings views.
+The launcher installs dependencies and models with `friday setup`. `friday` and `friday browser` start Browser; `friday agent` starts the independent coding-agent console. The launcher binds local services to loopback by default. Stop managed services with `Ctrl+C`.
 
-### CLI and launcher
+```mermaid
+flowchart LR
+  User --> Browser[FRIDAY Browser]
+  User --> Agent[friday agent]
+  Browser -->|REST| API[FastAPI]
+  Agent -->|agent session API| API
+  API --> DB[(SQLite)]
+  API --> Files[Uploaded files]
+  API --> Ollama[Ollama]
+```
 
-- `bin/friday.js` is a dependency-free CommonJS launcher requiring Node.js 20+.
-- `friday setup` installs npm and backend dependencies, builds the frontend, starts/checks Ollama, and pulls missing configured models.
-- `friday` starts Ollama if installed but not responding, then starts Uvicorn and the Next.js production server on ports 8000 and 3000. It opens the browser unless `--no-open` is supplied.
-- `friday chat` connects to the running backend when available. If the backend is stopped, it starts a temporary backend for the session. `friday chat -p "question"` sends one question and exits.
-- The terminal client in `bin/chat.js` streams the same `/api/chat/stream` events and reads/writes the same conversations as the web client.
-- `friday update` runs `git pull --ff-only` and clears the setup stamps so dependencies/build can be refreshed.
-- Setup state is stored in `~/.friday/state.json`; the CLI virtual environment is `~/.friday/venv`.
-- The terminal HUD is implemented in `bin/banner.js`; the chat prompt in `bin/chat.js` reflects the last request's success/error state. `FRIDAY_THEME` selects the logo palette, defaulting to pink; `FRIDAY_NO_BANNER=1` disables the startup HUD. It is suppressed for non-TTY output and when `NO_COLOR` is set. One-shot chat and `friday update` do not print the HUD.
+## Browser and API
 
-### API and persistence
+The App Router UI is under `src/app/`. The page loads documents, activity, collections, memories, agent sessions, settings, and health from FastAPI. Browser interactions use REST endpoints; agent sessions use the `/api/agent/*` routes.
 
-- `backend/app/main.py` defines the FastAPI application and initializes the SQLite schema.
-- The database path is `<FRIDAY_DATA_DIR>/friday.db`. Uploaded files are placed in `<FRIDAY_DATA_DIR>/uploads/`.
-- Without `FRIDAY_DATA_DIR`, the backend uses `./data` relative to its working directory. The CLI sets the default to `~/.friday/data` so web and terminal sessions share data.
-- SQLite tables store conversations, messages, documents, chunks, activity, collections, collection/document associations, and settings.
-
-## Data and Request Flows
+The API and persistent data are shared by Browser and the coding agent. SQLite stores documents, chunks, activity, collections, settings, and long-term memories. Uploaded sources are stored under `<FRIDAY_DATA_DIR>/uploads/`. New databases no longer create conversation or message tables. Older databases are not destructively rewritten; any legacy conversation tables are unused.
 
 ### Document ingestion
 
-```mermaid
-sequenceDiagram
-    participant UI as Web client
-    participant API as FastAPI
-    participant Disk as Upload directory
-    participant DB as SQLite
-    participant Ollama
+`backend/app/extraction.py` handles PDF, Office, CSV/TSV, JSON, HTML, Markdown, text, and code. Scanned pages can use Tesseract OCR. Images can use OCR and/or a local Ollama vision model. The API saves upload metadata, extracts text, chunks content, and stores chunks with optional embeddings. Interrupted processing is re-queued at startup.
 
-    UI->>API: POST /api/documents/upload (multipart file)
-    API->>Disk: Save uploaded file
-    API->>DB: Create document with processing status
-    API-->>UI: 202 Accepted and document metadata
-    API->>API: Background ingestion task
-    API->>Disk: Read file
-    API->>API: Extract PDF text or decode text-like file
-    API->>API: Split extracted text into overlapping chunks
-    loop For each chunk
-        API->>Ollama: Request embedding (when available)
-        Ollama-->>API: Embedding or request failure
-        API->>DB: Save chunk text and optional embedding JSON
-    end
-    API->>DB: Mark document ready or failed
-```
+### Search
 
-`backend/app/extraction.py` extracts PDF text per page (scanned pages are OCR'd when Tesseract is installed), DOCX/PPTX/XLSX, CSV/TSV, JSON, HTML, text and code. Images go to a local Ollama vision model (`FRIDAY_VISION_MODEL`) and/or OCR; if neither yields content the document is marked `failed` with the reason. Unsupported types are rejected at upload (HTTP 415). Chunks are paragraph-aware with overlap, de-duplicated by content hash, and keep their page number. Embedding failures do not prevent text chunks from being stored. Documents left in `processing` by a crash are re-queued at startup; `POST /api/documents/{id}/reprocess` re-runs extraction.
+`backend/app/knowledge.py` combines SQLite FTS5 lexical candidates with an in-memory vector index when stored embeddings are available. Results include document, chunk, page, method, and score metadata. Without embeddings, search continues with FTS5. Collections and document ID filters constrain results.
 
-### Search and retrieval
+### Memory
 
-Search uses hybrid retrieval:
+Long-term memories can be created, updated, deleted, listed, and searched through `/api/memories`. Memories are separate from agent session transcripts and do not depend on a conversation UI.
 
-1. Select ready chunks, optionally constrained to a collection.
-2. Tokenize the query and each chunk and calculate the proportion of unique query tokens found in that chunk.
-3. Sort by score, apply the configured distance filter, and return up to `k` snippets with document metadata.
+## Coding Agent
 
-`backend/app/knowledge.py`: chunks are indexed in an SQLite FTS5 table (BM25, kept in sync by triggers) and their stored Ollama embeddings are served from an in-memory normalised float32 matrix that is rebuilt only when documents change. The two candidate lists are fused with reciprocal-rank fusion, de-duplicated by content hash and filtered by collection or document ids. Results carry document, chunk, page, method (`lexical`/`semantic`/`hybrid`) and score. Without embeddings retrieval is FTS5-only. `main.cpp` contains an isolated C++ vector database prototype; it is not an integration dependency of the FastAPI or Next.js runtime.
+`friday_agent/engine.py` implements the maintained agent loop behind `/api/agent/sessions`. It supports persistent sessions, approvals, per-tool timeouts, repeated-failure protection, context trimming, and a repository map. The terminal console is launched by `bin/agent.js`; the Browser Agent panel uses the same session API.
 
-### Chat
+`backend/app/agent/loop.py` is a legacy `/api/agent/stream` loop retained for external clients. The bundled clients use the maintained session API.
 
-```mermaid
-sequenceDiagram
-    participant Client as Web or terminal client
-    participant API as FastAPI
-    participant DB as SQLite
-    participant Ollama
-
-    Client->>API: POST /api/chat/stream
-    API->>DB: Read settings, conversation, and recent messages
-    API->>DB: Hybrid top-k chunks + relevant memories
-    API->>API: Assemble system prompt, history, sources, and question
-    API->>Ollama: POST /api/chat with streaming enabled
-    loop Model output
-        Ollama-->>API: JSON line containing a token
-        API-->>Client: SSE data event containing token
-    end
-    API->>DB: Persist user and assistant messages; update conversation
-    API-->>Client: SSE done event with conversation_id and sources
-```
-
-The backend retains up to eight recent messages and bounds their combined content to 6,000 characters before sending them to Ollama. The non-streaming `POST /api/chat` endpoint follows the same retrieval and prompt assembly path. Chat requires an available Ollama generation model; the backend returns an error event/fallback when Ollama cannot be reached.
-
-## Coding agent
-
-There are two agent loops:
-
-* `friday_agent/engine.py`: the maintained agent behind `/api/agent/sessions`, used by the terminal console and the browser Agent panel. It has persistent sessions (`friday_agent/session_store.py`), approvals, per-tool timeouts, a guard against repeating identical failing calls, context trimming of old tool output, and a git-aware repository overview (`friday_agent/repo_map.py`).
-* `backend/app/agent/loop.py`: a legacy loop behind `/api/agent/stream`, kept for external clients. It shares the tools and the repository map with the engine. No bundled client uses it.
-
-File tools read and write UTF-8 and keep each file's line endings (CRLF stays CRLF). Paths, globs and symlinks are confined to the workspace.
+File tools stay within the selected project workspace. File changes, shell commands, git mutations, and network operations follow agent permissions and approval prompts.
 
 ## API Surface
 
-| Method                   | Path                                                       | Purpose                                                           |
-| ------------------------ | ---------------------------------------------------------- | ----------------------------------------------------------------- |
-| `GET`                    | `/health`                                                  | Health check                                                      |
-| `GET`                    | `/`                                                        | Service metadata and docs path                                    |
-| `GET`                    | `/api/status`                                              | Ollama availability, configured models, and document count        |
-| `GET`                    | `/api/models`                                              | Ollama model list, or an empty list if unavailable                |
-| `GET`, `PUT`             | `/api/settings`                                            | Read or update model, retrieval, temperature, and prompt settings |
-| `GET`                    | `/api/documents`                                           | List documents and processing status                              |
-| `POST`                   | `/api/documents/upload`                                    | Upload a file and schedule ingestion; returns `202`               |
-| `GET`, `DELETE`          | `/api/documents/{document_id}`                             | Read or delete a document                                         |
-| `POST`                   | `/api/search`                                              | Hybrid (FTS5 + vector) ranking with source attribution            |
-| `POST`, `GET`            | `/api/conversations`                                       | Create or list conversations                                      |
-| `GET`, `PATCH`, `DELETE` | `/api/conversations/{conversation_id}`                     | Read, rename, or delete a conversation                            |
-| `GET`                    | `/api/activity`                                            | List recent activity events                                       |
-| `GET`, `POST`            | `/api/collections`                                         | List or create collections                                        |
-| `PATCH`, `DELETE`        | `/api/collections/{collection_id}`                         | Rename or delete a collection                                     |
-| `POST`, `DELETE`         | `/api/collections/{collection_id}/documents/{document_id}` | Add or remove a document association                              |
-| `POST`                   | `/api/chat`                                                | Non-streaming chat                                                |
-| `POST`                   | `/api/chat/stream`                                         | Streaming chat using SSE (`token`, `error`, `done`)               |
+| Method            | Path                                      | Purpose                                               |
+| ----------------- | ----------------------------------------- | ----------------------------------------------------- |
+| `GET`             | `/health`, `/api/health`                  | Liveness and dependency readiness                     |
+| `GET`, `PUT`      | `/api/settings`                           | Embedding model and retrieval settings                |
+| `GET`, `POST`     | `/api/documents`, `/api/documents/upload` | List and ingest documents                             |
+| `GET`, `DELETE`   | `/api/documents/{id}`                     | Read or delete a document                             |
+| `POST`            | `/api/documents/{id}/reprocess`           | Reprocess a document                                  |
+| `POST`            | `/api/search`                             | Hybrid document search                                |
+| `GET`, `POST`     | `/api/collections`                        | List or create collections                            |
+| `GET`, `POST`     | `/api/memories`                           | List, search, or create long-term memories            |
+| `PATCH`, `DELETE` | `/api/memories/{id}`                      | Update or delete a memory                             |
+| `GET`             | `/api/activity`                           | Recent workspace activity                             |
+| `/api/agent/*`    | Multiple                                  | Agent sessions, turns, approvals, history, and health |
 
-FastAPI's generated reference is available at `http://localhost:8000/docs` while the backend is running.
+The standalone `/api/chat`, `/api/chat/stream`, `/api/conversations`, `/api/models`, and `/api/status` endpoints are not part of the current application.
 
-## Deployment Topologies
+## Deployment and Configuration
 
-### CLI-managed local services
+The CLI starts Next.js and FastAPI locally. `docker-compose.yml` provides containerized Ollama, FastAPI, and Browser services. Default ports are 3000, 8000, and 11434.
 
-The CLI runs the frontend and backend as local processes. Ollama is detected separately; when installed but not running, the CLI attempts to start `ollama serve`. Default ports are 3000 (frontend), 8000 (API), and 11434 (Ollama). The CLI binds the backend to `127.0.0.1`.
+| Variable                     | Purpose                                                           |
+| ---------------------------- | ----------------------------------------------------------------- |
+| `NEXT_PUBLIC_API_URL`        | FastAPI URL used by Browser                                       |
+| `FRIDAY_DATA_DIR`            | SQLite database, uploads, agent sessions, and API token directory |
+| `OLLAMA_URL` / `OLLAMA_HOST` | Ollama server URL                                                 |
+| `FRIDAY_MODEL`               | Default coding-agent model                                        |
+| `FRIDAY_EMBED_MODEL`         | Default embedding model                                           |
+| `FRIDAY_FALLBACK_MODELS`     | Agent model fallback order                                        |
+| `FRIDAY_VISION_MODEL`        | Optional image understanding model                                |
+| `FRIDAY_ALLOWED_ORIGINS`     | Additional CORS origins                                           |
 
-### Docker Compose
-
-`docker-compose.yml` defines three containers: Ollama, FastAPI, and Next.js. It maps ports 11434, 8000, and 3000 respectively, persists Ollama models in a named volume, and bind-mounts `./data` for backend data. Compose currently starts Ollama but does not itself pull the required models; pull them with `ollama pull llama3.2` and `ollama pull nomic-embed-text` if absent.
-
-## Configuration
-
-| Variable                 | Used by                    | Default / purpose                                                                               |
-| ------------------------ | -------------------------- | ----------------------------------------------------------------------------------------------- |
-| `NEXT_PUBLIC_API_URL`    | Next.js                    | API URL; local browser default is `http://localhost:8000`                                       |
-| `FRIDAY_DATA_DIR`        | FastAPI and CLI            | Data root for SQLite and uploads; CLI default is `~/.friday/data`                               |
-| `OLLAMA_URL`             | FastAPI and CLI            | Ollama API base URL; `http://localhost:11434`                                                   |
-| `FRIDAY_MODEL`           | CLI/backend initialization | Generation model; `llama3.2:latest` backend default                                             |
-| `FRIDAY_EMBED_MODEL`     | CLI/backend initialization | Embedding model; `nomic-embed-text:latest` backend default                                      |
-| `FRIDAY_MAX_TOKENS`      | FastAPI backend            | Maximum generated chat tokens; defaults to `2048`                                               |
-| `FRIDAY_ALLOWED_ORIGINS` | FastAPI                    | Comma-separated additional CORS origins; known local and deployed frontend origins are retained |
-| `FRIDAY_THEME`           | CLI banner                 | `pink` (default), `cyan`, `orange`, `green`, or `purple`                                        |
-| `FRIDAY_NO_BANNER`       | CLI banner                 | Set to `1` to disable the banner                                                                |
-| `NO_COLOR`               | CLI banner                 | Any value disables banner output                                                                |
-
-The launcher reads environment variables from the process environment; it does not load `.env` files itself. Docker Compose declares its own service-specific values.
-
-## Security and Privacy Notes
-
-- Local use keeps API, SQLite data, uploads, and Ollama traffic on the configured machine/network, but deployment configuration determines actual exposure.
-- Every request passes `backend/app/security.py`: loopback clients are trusted (`FRIDAY_AUTH=auto`), every other client must send the API token; `FRIDAY_AUTH=required` demands it everywhere. Host headers are checked (DNS-rebinding protection), requests are rate- and size-limited, and agent routes additionally require a local client or token. Bypass mode needs `FRIDAY_ALLOW_BYPASS=1`. See [operations.md](operations.md).
-- CORS is a browser policy, not authentication.
-- Chat prompts and retrieved document text are sent to the configured `OLLAMA_URL`; use a trusted local or explicitly configured Ollama service.
-
+Security and operational details are in [operations.md](operations.md). The vector database prototype in `main.cpp` is not a runtime dependency.

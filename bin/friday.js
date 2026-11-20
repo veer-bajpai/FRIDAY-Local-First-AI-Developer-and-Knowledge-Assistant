@@ -12,7 +12,7 @@ if (process.argv[2] === "agent") {
  *   friday update   pull latest code
  * App code and behaviour are untouched.
  */
-"use strict";
+("use strict");
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { spawn, spawnSync } = require("child_process");
@@ -22,7 +22,6 @@ const path = require("path");
 const http = require("http");
 const net = require("net");
 const crypto = require("crypto");
-const readline = require("readline");
 
 const APP_DIR = path.resolve(__dirname, "..");
 const HOME_DIR = path.join(os.homedir(), ".friday");
@@ -32,7 +31,8 @@ const IS_WIN = process.platform === "win32";
 const FRONTEND_PORT = 3000;
 const BACKEND_PORT = 8000;
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434";
-const CHAT_MODEL = process.env.FRIDAY_MODEL || "llama3.2";
+const OLLAMA_CACHE_RAM = process.env.LLAMA_ARG_CACHE_RAM || "1024";
+const AGENT_MODEL = process.env.FRIDAY_MODEL || "llama3.2";
 const EMBED_MODEL = process.env.FRIDAY_EMBED_MODEL || "nomic-embed-text";
 const VERSION = require(path.join(APP_DIR, "package.json")).version;
 
@@ -47,21 +47,21 @@ const die = (m) => {
 
 const args = process.argv.slice(2);
 const cmd = args.find((a) => !a.startsWith("-"));
+const backendOnly = args.includes("--backend-only");
 
 if (args.includes("-h") || args.includes("--help")) {
   console.log(`FRIDAY ${VERSION}
 
-  friday              Choose browser or terminal chat (defaults to browser without a TTY)
+  friday              Start FRIDAY Browser
   friday browser      Start FRIDAY and open it in your browser
+  friday agent        Start the coding agent in the terminal
   friday --no-open    Start browser mode without opening a browser tab
-  friday chat         Chat with FRIDAY right in the terminal (no browser)
-  friday chat -p "…"  Ask one question, print the answer, exit
   friday setup        Install dependencies, build, and download Ollama models
   friday update       Pull the latest version (rebuilds on next start)
   friday --version    Print version
 
 Set FRIDAY_THEME=cyan|orange|green|purple to change banner colour; FRIDAY_NO_BANNER=1 hides it.
-Terminal chat shares history with the web UI. Data: ~/.friday/data (override with FRIDAY_DATA_DIR)`);
+Data: ~/.friday/data (override with FRIDAY_DATA_DIR)`);
   process.exit(0);
 }
 if (args.includes("-v") || args.includes("--version")) {
@@ -69,10 +69,10 @@ if (args.includes("-v") || args.includes("--version")) {
   process.exit(0);
 }
 
-const KNOWN_COMMANDS = ["browser", "web", "start", "chat", "setup", "update"];
+const KNOWN_COMMANDS = ["browser", "web", "start", "setup", "update"];
 if (cmd && !KNOWN_COMMANDS.includes(cmd)) {
   die(
-    `Unknown command "${cmd}". Try: friday browser | friday chat | friday --help`,
+    `Unknown command "${cmd}". Try: friday browser | friday agent | friday --help`,
   );
 }
 
@@ -249,13 +249,14 @@ let ollamaChild = null;
 async function ensureOllama() {
   if (!has("ollama")) {
     warn(
-      "Ollama is not installed — chat/embeddings won't work. Re-run the install script or get it from https://ollama.com",
+      "Ollama is not installed — the agent and optional embeddings won't work. Re-run the install script or get it from https://ollama.com",
     );
     return false;
   }
   if (!(await waitFor(OLLAMA_URL, 1))) {
     info("Starting Ollama…");
     ollamaChild = spawn("ollama", ["serve"], {
+      env: { ...process.env, LLAMA_ARG_CACHE_RAM: OLLAMA_CACHE_RAM },
       stdio: "ignore",
     });
     ollamaChild.on("error", () => {});
@@ -267,7 +268,7 @@ async function ensureOllama() {
   const list = (
     spawnSync("ollama", ["list"], { encoding: "utf8" }).stdout || ""
   ).toLowerCase();
-  for (const model of [EMBED_MODEL, CHAT_MODEL]) {
+  for (const model of [EMBED_MODEL, AGENT_MODEL]) {
     const base = model.split(":")[0].toLowerCase();
     if (!list.includes(base)) {
       info(`Downloading model ${model} (one-time, may take a few minutes)…`);
@@ -300,115 +301,33 @@ const killTree = (ch) => {
   } catch {}
 };
 
-// ---------- terminal chat: reuse a running backend, or start one quietly ----------
-async function runChat() {
-  const api = `http://localhost:${BACKEND_PORT}`;
-  let backend = null;
-  if (!(await waitFor(api + "/health", 1))) {
-    info("Starting FRIDAY backend…");
-    fs.mkdirSync(HOME_DIR, { recursive: true });
-    const log = fs.openSync(path.join(HOME_DIR, "backend.log"), "a");
-    backend = spawn(
-      venvPy,
-      [
-        "-m",
-        "uvicorn",
-        "app.main:app",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        String(BACKEND_PORT),
-      ],
-      {
-        cwd: path.join(APP_DIR, "backend"),
-        env: buildEnv(),
-        stdio: ["ignore", log, log],
-      },
-    );
-    backend.on("error", () => {});
-    if (!(await waitFor(api + "/health", 60))) {
-      killTree(backend);
-      die(`Backend did not start. Check ${path.join(HOME_DIR, "backend.log")}`);
-    }
-  }
-  const code = await require("./chat.js").start({ api, args });
-  if (backend) killTree(backend);
-  if (ollamaChild) killTree(ollamaChild);
-  process.exit(code || 0);
-}
-
-async function chooseMode() {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) return "browser";
-
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-  console.log(`  How do you want to use FRIDAY?
-
-    ${c(36, "1")}  Browser         web app at http://localhost:${FRONTEND_PORT}      ${c(90, "(friday browser)")}
-    ${c(36, "2")}  Terminal chat   chat right here, no browser       ${c(90, "(friday chat)")}
-`);
-
-  return new Promise((resolve) => {
-    const prompt = () => process.stdout.write("  Choose 1 or 2: ");
-    rl.on("SIGINT", () => {
-      rl.close();
-      console.log();
-      process.exit(0);
-    });
-    rl.on("line", (line) => {
-      const choice = line.trim().toLowerCase();
-      if (["1", "b", "browser", "web"].includes(choice)) {
-        rl.close();
-        console.log();
-        resolve("browser");
-      } else if (["2", "c", "chat", "t", "terminal"].includes(choice)) {
-        rl.close();
-        console.log();
-        resolve("chat");
-      } else {
-        prompt();
-      }
-    });
-    prompt();
-  });
-}
-
 // ---------- main ----------
 (async () => {
-  const oneShot =
-    cmd === "chat" && (args.includes("-p") || args.includes("--print"));
-  if (!oneShot && cmd !== "update") {
+  if (cmd !== "update") {
     require("./banner.js").printBanner({
       version: VERSION,
-      mode:
-        cmd === "chat"
-          ? "terminal chat"
-          : cmd === "setup"
-            ? "setup"
-            : cmd
-              ? "browser"
-              : "",
+      mode: cmd === "setup" ? "setup" : cmd ? "browser" : "",
     });
   }
-  let mode = cmd === "web" || cmd === "start" ? "browser" : cmd;
-  if (!mode) mode = args.includes("--no-open") ? "browser" : await chooseMode();
-  setupApp({ skipBuild: mode === "chat" });
+  const mode = cmd === "web" || cmd === "start" ? "browser" : cmd || "browser";
+  setupApp({ skipBuild: backendOnly });
   await ensureOllama();
-  if (mode === "chat") return runChat();
   if (mode === "setup") {
-    ok(
-      "Setup complete. Start FRIDAY with:  friday browser   (or terminal chat:  friday chat)",
-    );
+    ok("Setup complete. Start FRIDAY with:  friday browser");
     if (ollamaChild) ollamaChild.kill();
     return process.exit(0);
   }
 
-  for (const p of [FRONTEND_PORT, BACKEND_PORT]) {
-    if (await portInUse(p))
-      die(`Port ${p} is already in use. Is FRIDAY already running?`);
-  }
+  const apiUrl = `http://127.0.0.1:${BACKEND_PORT}`;
+  const backendAlreadyUp = await waitFor(apiUrl + "/health", 1);
+  if (!backendOnly && (await portInUse(FRONTEND_PORT)))
+    die(
+      `Port ${FRONTEND_PORT} is already in use. Is FRIDAY Browser already running?`,
+    );
+  if (!backendAlreadyUp && (await portInUse(BACKEND_PORT)))
+    die(
+      `Port ${BACKEND_PORT} is in use, but the FRIDAY API did not answer its health check.`,
+    );
   const env = buildEnv();
 
   const children = [];
@@ -450,21 +369,39 @@ async function chooseMode() {
   process.on("SIGINT", () => shutdown(0));
   process.on("SIGTERM", () => shutdown(0));
 
-  info("Starting FRIDAY…");
-  start(
-    "backend",
-    venvPy,
-    [
-      "-m",
-      "uvicorn",
-      "app.main:app",
-      "--host",
-      "127.0.0.1",
-      "--port",
-      String(BACKEND_PORT),
-    ],
-    path.join(APP_DIR, "backend"),
-  );
+  if (!backendAlreadyUp) {
+    info(backendOnly ? "Starting FRIDAY API…" : "Starting FRIDAY…");
+    start(
+      "backend",
+      venvPy,
+      [
+        "-m",
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        String(BACKEND_PORT),
+      ],
+      path.join(APP_DIR, "backend"),
+    );
+  }
+  if (backendOnly) {
+    if (backendAlreadyUp) {
+      ok(`FRIDAY API is already running at ${apiUrl}`);
+      if (ollamaChild) killTree(ollamaChild);
+      return process.exit(0);
+    }
+    if (await waitFor(apiUrl + "/health")) {
+      ok(`FRIDAY API is running at ${apiUrl}  (Ctrl+C to stop)`);
+    } else {
+      warn(
+        `FRIDAY API did not respond. Check the backend logs or ${path.join(HOME_DIR, "backend.log")}.`,
+      );
+      shutdown(1);
+    }
+    return;
+  }
   start(
     "frontend",
     process.execPath,

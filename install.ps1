@@ -95,6 +95,5 @@ if ($LASTEXITCODE -ne 0) { Die "Setup did not finish. Check the messages above."
 Write-Host ""
 Ok "FRIDAY is installed. Open a NEW terminal and run:"
 Write-Host "  friday browser    run in your browser"
-Write-Host "  friday chat       run in this terminal"
-Write-Host "  friday            choose a mode"
+Write-Host "  friday agent      run the coding agent"
 

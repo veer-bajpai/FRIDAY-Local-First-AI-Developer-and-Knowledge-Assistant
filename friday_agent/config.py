@@ -65,7 +65,6 @@ DEFAULT_EMBED_MODEL = os.getenv("FRIDAY_EMBED_MODEL", "nomic-embed-text:latest")
 # Comma-separated models to try, in order, when the configured model is not installed.
 FALLBACK_MODELS = [m.strip() for m in os.getenv(
     "FRIDAY_FALLBACK_MODELS", "qwen2.5-coder:7b,llama3.2:latest,llama3.1:8b,qwen3:8b").split(",") if m.strip()]
-CHAT_MAX_TOKENS = int(os.getenv("FRIDAY_MAX_TOKENS", "2048"))  # reply length limit for chat (-1 = model default)
 OLLAMA_TIMEOUT_SECONDS = float(os.getenv("FRIDAY_OLLAMA_TIMEOUT", "300"))  # max wait between streamed chunks
 
 # Ollama's default context is only 4096 tokens - far too small for an agent.

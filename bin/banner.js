@@ -22,23 +22,44 @@ const LOGO = [
   "╚═╝     ╚═╝  ╚═╝╚═╝╚═════╝ ╚═╝  ╚═╝   ╚═╝   ",
 ];
 // warm amber → deep orange, top to bottom
-const SHADES = [[255, 196, 92], [255, 172, 64], [255, 148, 40], [246, 124, 28], [232, 102, 22], [150, 70, 20]];
+const SHADES = [
+  [255, 196, 92],
+  [255, 172, 64],
+  [255, 148, 40],
+  [246, 124, 28],
+  [232, 102, 22],
+  [150, 70, 20],
+];
 
 let printed = false;
 
 function enabled() {
   if (printed) return false;
-  if (!process.stdout.isTTY || process.env.NO_COLOR || process.env.TERM === "dumb") return false;
+  if (
+    !process.stdout.isTTY ||
+    process.env.NO_COLOR ||
+    process.env.TERM === "dumb"
+  )
+    return false;
   if (process.env.FRIDAY_NO_BANNER === "1") return false;
   const argv = process.argv.slice(2);
-  if (argv.includes("-p") || argv.includes("--prompt") || argv.includes("--print")) return false;
+  if (
+    argv.includes("-p") ||
+    argv.includes("--prompt") ||
+    argv.includes("--print")
+  )
+    return false;
   if (argv[0] === "update") return false;
   return true;
 }
 
 function version() {
   try {
-    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version || "";
+    return (
+      JSON.parse(
+        fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"),
+      ).version || ""
+    );
   } catch {
     return "";
   }
@@ -52,22 +73,29 @@ function render(opts) {
   const faint = fg(88, 82, 76);
   const cols = process.stdout.columns || 80;
 
-  const mode = String(o.mode || process.argv[2] || "").replace(/^-.*/, "") || "browser";
-  const label = { chat: "terminal chat", agent: "coding agent", browser: "web app", setup: "setup" }[mode] || mode;
+  const mode =
+    String(o.mode || process.argv[2] || "").replace(/^-.*/, "") || "browser";
+  const label =
+    { agent: "coding agent", browser: "web app", setup: "setup" }[mode] || mode;
   const v = o.version || version();
   let where = process.cwd();
   const home = os.homedir();
-  if (where.toLowerCase().startsWith(home.toLowerCase())) where = "~" + where.slice(home.length);
+  if (where.toLowerCase().startsWith(home.toLowerCase()))
+    where = "~" + where.slice(home.length);
 
   const lines = [""];
   if (cols >= 50) {
     LOGO.forEach((row, i) => lines.push("  " + fg(...SHADES[i])(row)));
     lines.push("");
-    lines.push("  " + muted("Fast Retrieval, Intelligent Dialogue & Autonomous Yield"));
+    lines.push(
+      "  " + muted("Fast Retrieval, Intelligent Dialogue & Autonomous Yield"),
+    );
   } else {
     lines.push("  " + `\x1b[48;2;255;148;40m\x1b[38;2;20;14;8m FRIDAY \x1b[0m`);
   }
-  const info = [v ? orange("v" + v) : null, muted(label), faint(where)].filter(Boolean).join(faint("  ·  "));
+  const info = [v ? orange("v" + v) : null, muted(label), faint(where)]
+    .filter(Boolean)
+    .join(faint("  ·  "));
   lines.push("  " + info);
   lines.push("");
   return lines.join("\n");
@@ -85,8 +113,10 @@ function show(opts) {
 const callable = (fn) =>
   new Proxy(fn, {
     get(target, prop) {
-      if (prop === "render" || prop === "renderBanner" || prop === "text") return (o) => (enabled() ? render(o) : "");
-      if (prop === "default" || prop === "__esModule") return prop === "__esModule" ? false : show;
+      if (prop === "render" || prop === "renderBanner" || prop === "text")
+        return (o) => (enabled() ? render(o) : "");
+      if (prop === "default" || prop === "__esModule")
+        return prop === "__esModule" ? false : show;
       if (prop in target) return target[prop];
       if (typeof prop === "symbol") return undefined;
       return show;
