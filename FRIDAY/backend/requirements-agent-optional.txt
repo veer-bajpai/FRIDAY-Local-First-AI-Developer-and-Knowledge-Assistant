@@ -1,0 +1,6 @@
+mcp==1.9.4
+# Local, offline voice input (no cloud speech service)
+numpy>=1.26
+sounddevice>=0.4.6
+faster-whisper>=1.0
+
