@@ -63,6 +63,32 @@ async def chat_stream(
     except (httpx.RemoteProtocolError, httpx.ReadError) as e:
         raise LLMError("The connection to Ollama was lost mid-response (was Ollama stopped?).") from e
 
+async def warm_up(model: str, prefix: list[dict], options: dict | None = None) -> dict[str, Any] | None:
+    """Load ``model`` and evaluate ``prefix`` (usually the system prompt) into Ollama's prompt cache.
+
+    The next request that starts with the same messages and options reuses the cached tokens,
+    so the first question does not pay for model loading or the system prompt. One generated
+    token, no tools. Returns Ollama's timing counters, or None if Ollama is unreachable.
+    """
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": [*prefix, {"role": "user", "content": "Reply with OK."}],
+        "stream": False,
+        "keep_alive": OLLAMA_KEEP_ALIVE,
+        "options": {**(options or {}), "num_predict": 1},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(OLLAMA_TIMEOUT_SECONDS, connect=5)) as client:
+            response = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
+            if response.status_code >= 400:
+                return None
+            data = response.json()
+    except (httpx.HTTPError, ValueError):
+        return None
+    return {key: data.get(key) for key in ("load_duration", "prompt_eval_count", "prompt_eval_duration",
+                                           "total_duration")}
+
+
 async def installed_models(force: bool = False) -> list[str] | None:
     """Installed Ollama models (cached briefly), or None when Ollama is unreachable."""
     now = time.monotonic()
@@ -107,3 +133,4 @@ async def resolve_model(requested: str, *, purpose: str = "chat") -> tuple[str, 
     if candidates:
         return candidates[0], f"Model '{requested}' is not installed; using '{candidates[0]}'. Run: ollama pull {requested}"
     raise LLMError(f"No {purpose} model is installed in Ollama. Run: ollama pull {requested}")
+

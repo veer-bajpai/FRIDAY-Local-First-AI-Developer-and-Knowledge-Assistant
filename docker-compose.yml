@@ -31,3 +31,4 @@ services:
       - backend
 volumes:
   ollama_models:
+

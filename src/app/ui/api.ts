@@ -169,3 +169,4 @@ export function perDay(dates: string[], days = 14) {
   }
   return buckets;
 }
+

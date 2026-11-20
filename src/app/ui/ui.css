@@ -297,7 +297,8 @@
 .searchbox span {
   flex: 1;
 }
-kbd {
+/* scoped to the browser workspace; :where() keeps the original specificity */
+:where(.app) kbd {
   padding: 3px 6px;
   border-radius: 6px;
   background: var(--sunken);
@@ -1912,3 +1913,4 @@ svg.rot {
 .answer li::marker { color: var(--muted); }
 .side-label button { display: inline-flex; align-items: center; gap: 3px; }
 .answer img { max-width: 100%; border-radius: 10px; }
+

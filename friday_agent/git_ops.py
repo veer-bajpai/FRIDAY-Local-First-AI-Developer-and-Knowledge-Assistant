@@ -198,3 +198,4 @@ def git_tools() -> list[Tool]:
         Tool("batch_worktrees", "Create isolated branches/worktrees for up to six independent coding tasks.",
              _obj({"tasks": {"type": "array", "items": string}}, ["tasks"]), batch_worktrees, False),
     ]
+

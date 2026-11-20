@@ -36,3 +36,4 @@ def api(tmp_path, monkeypatch):
     main.initialize()
     with TestClient(main.app) as client:
         yield client, main
+

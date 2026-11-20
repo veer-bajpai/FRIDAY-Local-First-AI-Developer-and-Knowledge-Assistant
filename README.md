@@ -1021,3 +1021,4 @@ https://github.com/veer-bajpai/FRIDAY-Local-First-AI-Knowledge-Assistant
   <strong>FRIDAY</strong><br/>
    <em>Local intelligence. Searchable knowledge. One workspace.</em>
 </p>
+

@@ -110,3 +110,4 @@ def test_resolve_model_prefers_configured_fallbacks(monkeypatch):
     monkeypatch.setattr(llm, "installed_models", installed)
     assert asyncio.run(llm.resolve_model("llama3.2")) [0] == "qwen2.5-coder:7b"
     assert asyncio.run(llm.resolve_model("phi3:mini")) == ("phi3:mini", None)
+

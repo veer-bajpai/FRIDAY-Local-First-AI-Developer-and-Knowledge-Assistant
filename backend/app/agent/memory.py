@@ -84,3 +84,4 @@ async def maybe_compact(
         "content": f"[Summary of earlier work]\n{summary.get('content', '')}",
     }
     return [messages[0], note, *messages[cutoff:]]
+

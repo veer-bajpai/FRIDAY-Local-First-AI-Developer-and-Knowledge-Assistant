@@ -3,3 +3,4 @@ mcp==1.9.4
 numpy>=1.26
 sounddevice>=0.4.6
 faster-whisper>=1.0
+

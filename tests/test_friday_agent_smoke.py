@@ -122,14 +122,18 @@ def test_fullscreen_terminal_app_mounts_without_live_backend():
             assert "/plan" in str(guide.content)
             assert "/check" in str(guide.content)
 
+            # Friday Code indicator: "✻ Thinking… (3s · esc to interrupt)", then "Writing…" while streaming
             app._start_thinking()
             app.thinking_started_at -= 3.1
+            app.request_state = "processing"
             app._tick_thinking()
-            assert "Reading context" in str(app.query_one("#thinking").content)
-            app._set_streaming()
-            assert "Streaming response" in str(app.query_one("#thinking").content)
-            app._finish_thinking()
-            assert "Thought for 3s" in str(app.query_one("#thinking").content)
+            thinking = str(app.query_one("#thinking").content)
+            assert "3s" in thinking and "esc" in thinking and "interrupt" in thinking
+            app.request_state = "generating"
+            app._tick_thinking()
+            assert "Writing" in str(app.query_one("#thinking").content)
+            app._stop_thinking()
+            assert str(app.query_one("#thinking").content) == ""
             assert app.thinking_timer is None
             await pilot.press("tab")
 
@@ -481,3 +485,4 @@ def test_local_agent_api_rejects_remote_client_with_spoofed_local_origin():
     with pytest.raises(HTTPException) as exc:
         require_local_agent_request(request_for(("203.0.113.8", 1234), "http://localhost:3000"))
     assert exc.value.status_code == 403
+

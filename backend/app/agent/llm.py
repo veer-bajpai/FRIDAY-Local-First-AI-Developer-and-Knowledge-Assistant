@@ -25,3 +25,4 @@ async def chat(
         "content": "".join(content),
         "tool_calls": tool_calls,
     }
+

@@ -83,3 +83,4 @@ MODE_LABELS = {
     "plan": "plan mode (read-only)",
     "bypass": "bypass permissions",
 }
+

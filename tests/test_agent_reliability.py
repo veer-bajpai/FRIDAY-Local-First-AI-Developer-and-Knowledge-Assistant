@@ -138,3 +138,4 @@ def test_repo_map_summarises_large_projects(tmp_path: Path):
     assert summary.startswith("600 files") and "node_modules" not in summary
     assert len(summary.splitlines()) < 130
     assert "Repository overview" in create_session(tmp_path, "m").messages[0]["content"]
+

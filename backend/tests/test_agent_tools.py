@@ -173,3 +173,4 @@ def test_agent_router_streams_typed_events_and_restricts_remote_access(monkeypat
     assert '"type": "session"' in response.text
     assert '"type": "thinking"' in response.text
     assert '"type": "done"' in response.text
+

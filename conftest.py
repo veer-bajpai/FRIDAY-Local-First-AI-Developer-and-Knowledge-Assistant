@@ -21,3 +21,4 @@ def _isolated_agent_store(tmp_path_factory, monkeypatch):
         return
     monkeypatch.setattr(agent_routes, "PERSIST_PATH", store / "agent_sessions.json")
     yield store
+

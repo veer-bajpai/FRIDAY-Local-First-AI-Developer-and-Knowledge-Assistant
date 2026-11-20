@@ -58,3 +58,4 @@ def repo_map(root: Path, max_files: int = 100) -> str:
             lines.append("... use list_dir / glob / grep to explore further")
             break
     return "\n".join(lines)
+

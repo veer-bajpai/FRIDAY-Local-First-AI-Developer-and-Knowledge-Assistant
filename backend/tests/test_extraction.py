@@ -110,3 +110,4 @@ def test_upload_api_rejects_unsupported_and_reports_failures(api, monkeypatch):
     stored = client.get(f"/api/documents/{doc['id']}").json()
     assert stored["status"] == "failed" and "vision model" in stored["error"]
     assert stored["chunks"] == 0
+

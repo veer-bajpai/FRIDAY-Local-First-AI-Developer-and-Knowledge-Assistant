@@ -99,3 +99,4 @@ def test_llm_stream_reports_inline_errors(monkeypatch):
     except llm.LLMError as exc:
         raised = str(exc)
     assert raised and "model runner crashed" in raised
+

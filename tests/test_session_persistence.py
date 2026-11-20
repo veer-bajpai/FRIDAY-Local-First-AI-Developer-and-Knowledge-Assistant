@@ -161,3 +161,4 @@ def test_http_resume_and_history_after_restart(tmp_path: Path, monkeypatch):
         listed = client.get("/api/agent/sessions").json()
         assert listed[0]["title"] == "remember 42" and listed[0]["status"] == "completed"
         assert client.post("/api/agent/sessions", json={"resume_id": "doesnotexist"}).status_code == 404
+

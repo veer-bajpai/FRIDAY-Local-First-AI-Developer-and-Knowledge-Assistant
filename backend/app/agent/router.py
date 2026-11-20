@@ -72,3 +72,4 @@ async def approve_agent_action(request: ApprovalRequest) -> dict[str, bool]:
     if not resolve_approval(request.session_id, request.approval_id, request.decision):
         raise HTTPException(status_code=404, detail="No pending approval with that id.")
     return {"ok": True}
+

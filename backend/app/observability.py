@@ -92,3 +92,4 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
                            "client": request.client.host if request.client else "-"},
                 )
             request_id_var.reset(token)
+

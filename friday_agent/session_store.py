@@ -60,6 +60,8 @@ def snapshot(session: AgentSession) -> dict[str, Any]:
         "undo_truncated": truncated_undo,
         "tool_log": session.tool_log[-MAX_TOOL_LOG:],
         "read_files": sorted(str(p) for p in session.context.read_files),
+        "tool_routing": session.tool_routing,
+        "last_turn_used_tools": session.last_turn_used_tools,
     }
 
 
@@ -96,6 +98,9 @@ def restore(data: dict[str, Any]) -> AgentSession:
     session.usage = {"in": int(usage.get("in", 0)), "out": int(usage.get("out", 0))}
     session.context.todos = list(data.get("todos") or [])
     session.tool_log = list(data.get("tool_log") or [])
+    if data.get("tool_routing") in {"auto", "always", "never"}:
+        session.tool_routing = data["tool_routing"]
+    session.last_turn_used_tools = bool(data.get("last_turn_used_tools"))
     for turn in data.get("turns") or []:
         files = [(Path(path), previous) for path, previous in turn.get("files", [])]
         session.context.turns.append({"msg_index": int(turn.get("msg_index", 1)),
@@ -148,3 +153,4 @@ def load_all(directory: Path) -> list[AgentSession]:
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError, RuntimeError):
             continue
     return sessions
+

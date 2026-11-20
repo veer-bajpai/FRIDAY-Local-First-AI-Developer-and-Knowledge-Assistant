@@ -70,3 +70,4 @@ Typing `remember: <fact>` (or `/remember <fact>`) in chat stores a memory withou
 ## Logs and health
 
 Every response carries `X-Request-ID`, which matches the access-log line. Unhandled errors return a generic 500 with that id; details stay in the log. Document ingestion interrupted by a shutdown is re-queued at startup. A broken MCP integration is reported in `/api/health` and does not stop the backend.
+

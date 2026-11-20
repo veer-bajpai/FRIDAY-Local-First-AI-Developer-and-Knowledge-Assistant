@@ -69,3 +69,4 @@ export function useTheme() {
 
 /** Runs before first paint (inlined in layout) so the page never flashes the wrong theme. */
 export const THEME_BOOTSTRAP = `(function(){try{var m=localStorage.getItem('${KEY}');var d=m==='dark'||(m!=='light'&&matchMedia('(prefers-color-scheme: dark)').matches);var e=document.documentElement;e.dataset.theme=d?'dark':'light';e.style.colorScheme=d?'dark':'light';}catch(_){}})();`;
+

@@ -55,3 +55,4 @@ def build_report(root: str | Path) -> Path:
 """
     report.write_text(document, encoding="utf-8")
     return report
+

@@ -72,3 +72,4 @@ class MCPManager:
 
     async def close(self) -> None:
         await self.stack.aclose()
+

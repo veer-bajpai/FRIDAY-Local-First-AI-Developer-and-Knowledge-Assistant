@@ -68,3 +68,4 @@ export function ThinkingIndicator({ status }: { status: ThinkingStatus }) {
     </div>
   );
 }
+

@@ -148,3 +148,4 @@ def make_preview(tool: AgentTool, args: dict[str, Any], context: Context) -> str
     if tool.preview is None:
         return ""
     return _truncate(tool.preview(args, context), 12_000)
+

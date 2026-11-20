@@ -113,3 +113,4 @@ def test_bypass_mode_and_root_project_are_refused(monkeypatch, tmp_path):
         assert client.patch(f"/api/agent/sessions/{sid}", json={"mode": "bypass"}).status_code == 403
         monkeypatch.setenv("FRIDAY_ALLOW_BYPASS", "1")
         assert client.patch(f"/api/agent/sessions/{sid}", json={"mode": "bypass"}).status_code == 200
+

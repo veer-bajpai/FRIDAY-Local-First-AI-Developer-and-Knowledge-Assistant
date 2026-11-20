@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from friday_agent.config import DEFAULT_MODEL, MAX_STEPS, MODES, NUM_CTX, load_custom_commands
 from friday_agent.engine import (
     AgentSession, compact_session, context_report, create_session, rewind,
-    run_turn, undo,
+    run_turn, undo, warm_session,
 )
 from friday_agent import session_store
 from friday_agent.insights import build_report
@@ -94,6 +94,9 @@ class CreateSessionRequest(BaseModel):
     model: str | None = Field(default=None, max_length=120)
     mode: str = Field(default="default", max_length=32)
     project_root: str | None = Field(default=None, max_length=2048)
+    # Optional, used by the terminal: "auto" sends tool schemas only when a prompt needs them.
+    tool_routing: str | None = Field(default=None, pattern=r"^(auto|always|never)$")
+    warm_up: bool = False  # load the model and cache the system prompt in the background
 
 
 class TurnRequest(BaseModel):
@@ -103,6 +106,7 @@ class TurnRequest(BaseModel):
 class ModeRequest(BaseModel):
     mode: str | None = Field(default=None, min_length=1, max_length=32)
     model: str | None = Field(default=None, min_length=1, max_length=120, pattern=r"^[A-Za-z0-9_.:/@-]+$")
+    tool_routing: str | None = Field(default=None, pattern=r"^(auto|always|never)$")
 
 
 class ApprovalRequest(BaseModel):
@@ -225,6 +229,26 @@ def _restore_sessions() -> None:
         pass
 
 
+_WARM_TASKS: set[asyncio.Task] = set()
+
+
+def _start_warm_up(session: AgentSession) -> None:
+    """Pre-load the model and system prompt without delaying the response."""
+    async def run() -> None:
+        try:
+            timings = await warm_session(session)
+            if timings:
+                log.info("warm-up %s model=%s load=%.2fs prompt=%s tok in %.2fs", session.id[:8], session.model,
+                         (timings.get("load_duration") or 0) / 1e9, timings.get("prompt_eval_count"),
+                         (timings.get("prompt_eval_duration") or 0) / 1e9)
+        except Exception as exc:  # warm-up is an optimisation only
+            log.debug("warm-up failed: %s", exc)
+
+    task = asyncio.create_task(run())
+    _WARM_TASKS.add(task)
+    task.add_done_callback(_WARM_TASKS.discard)
+
+
 def _session_payload(session: AgentSession) -> dict:
     return {
         "id": session.id,
@@ -241,6 +265,7 @@ def _session_payload(session: AgentSession) -> dict:
         "last_error": session.last_error,
         "messages": len(session.messages) - 1,
         "resumable": len(session.messages) > 1,
+        "tool_routing": session.tool_routing,
     }
 
 
@@ -289,6 +314,10 @@ async def create_agent_session(body: CreateSessionRequest) -> dict:
                 existing = _attach(loaded)
         if existing is None:
             raise HTTPException(status_code=404, detail="That agent session no longer exists.")
+        if body.tool_routing:
+            existing.tool_routing = body.tool_routing
+        if body.warm_up:
+            _start_warm_up(existing)
         return _session_payload(existing)
     available = [session_id for session_id, session in SESSIONS.items() if not session.busy]
     while len(SESSIONS) >= MAX_SESSIONS and available:
@@ -310,7 +339,11 @@ async def create_agent_session(body: CreateSessionRequest) -> dict:
         session = create_session(root, model, body.mode)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if body.tool_routing:
+        session.tool_routing = body.tool_routing
     _attach(session).save()
+    if body.warm_up:
+        _start_warm_up(session)
     return {**_session_payload(session), "model_note": note}
 
 
@@ -349,8 +382,10 @@ async def update_agent_session(session_id: str, body: ModeRequest) -> dict:
     session = _session_or_404(session_id)
     if session.busy:
         raise HTTPException(status_code=409, detail="Wait for the current turn to finish before changing modes.")
-    if body.mode is None and body.model is None:
-        raise HTTPException(status_code=422, detail="Send a mode or a model to change.")
+    if body.mode is None and body.model is None and body.tool_routing is None:
+        raise HTTPException(status_code=422, detail="Send a mode, a model or tool_routing to change.")
+    if body.tool_routing is not None:
+        session.tool_routing = body.tool_routing
     if body.model is not None:
         try:
             installed = await list_models()
@@ -381,10 +416,12 @@ async def agent_turn(session_id: str, body: TurnRequest) -> StreamingResponse:
         body.prompt = f"{prefix}\n\n{body.prompt}"
 
     async def events():
+        session.turn_task = asyncio.current_task()
         try:
             async for event in run_turn(session, body.prompt, reserved=True):
                 yield "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
         finally:
+            session.turn_task = None
             session.busy = False
             session.save()
 
@@ -407,6 +444,27 @@ async def approve_tool_call(session_id: str, approval_id: str, body: ApprovalReq
     future.set_result(body.decision)
     session.save()
     return {"approved": body.decision != "deny", "decision": body.decision}
+
+
+@router.post("/api/agent/sessions/{session_id}/cancel", dependencies=[Depends(require_local_agent_request)])
+async def cancel_agent_turn(session_id: str) -> dict:
+    """Stop the running turn: cancels the model request (Ollama stops generating) and any tool wait."""
+    session = _session_or_404(session_id)
+    if not session.busy:
+        return {"cancelled": False, "status": session.status, "busy": False}
+    for future in session.pending_approvals.values():
+        if not future.done():
+            future.set_result("deny")
+    task = session.turn_task
+    if task is not None and not task.done():
+        task.cancel()
+    for _ in range(50):  # wait up to 5 s for the turn to unwind so the next prompt is not refused
+        if not session.busy:
+            break
+        await asyncio.sleep(0.1)
+    if session.busy and task is None:
+        session.busy = False  # the stream ended without running its cleanup; release the session
+    return {"cancelled": True, "status": session.status, "busy": session.busy}
 
 
 @router.post("/api/agent/sessions/{session_id}/undo", dependencies=[Depends(require_local_agent_request)])
@@ -461,3 +519,4 @@ async def delete_agent_session(session_id: str) -> dict:
     SESSIONS.pop(session_id, None)
     session_store.delete(session_id, _store_dir())
     return {"deleted": True}
+

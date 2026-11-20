@@ -164,3 +164,4 @@ class Permissions:
     # bash rules are prefix rules, so "bash:git commit" also matches later "git commit -m y"
     def matches_allow(self, tool: Tool, args: dict) -> bool:
         return rule_for(tool, args) in self.allow
+

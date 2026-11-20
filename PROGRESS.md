@@ -61,3 +61,4 @@ The terminal console (`friday_agent/terminal.py`) was kept byte-for-byte unchang
 - The legacy `/api/agent/stream` loop has no session persistence. Its approvals, permissions and shared tools are unchanged.
 - The shell denylist is not a sandbox. Use Docker for untrusted repositories.
 - `main.cpp` (C++ vector prototype) remains isolated and unused.
+

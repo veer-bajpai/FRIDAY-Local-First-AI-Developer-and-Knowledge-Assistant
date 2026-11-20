@@ -393,3 +393,4 @@ def build_tools(read_only: bool = False) -> dict[str, Tool]:
     if read_only:
         tools = [t for t in tools if t.read_only]
     return {t.name: t for t in tools}
+

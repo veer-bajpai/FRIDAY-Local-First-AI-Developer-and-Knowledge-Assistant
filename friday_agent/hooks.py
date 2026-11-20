@@ -135,3 +135,4 @@ class Hooks:
                 reason = completed.stderr.strip() or completed.stdout.strip() or f"exit code {completed.returncode}"
                 return False, reason
         return (True, "") if event == "PreToolUse" else None
+

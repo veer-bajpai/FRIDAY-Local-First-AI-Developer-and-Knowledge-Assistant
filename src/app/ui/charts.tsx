@@ -82,3 +82,4 @@ export function Donut({ parts, size = 120, label }: { parts: { name: string; val
     </svg>
   );
 }
+

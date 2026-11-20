@@ -448,9 +448,9 @@ export function HistoryView({
 /* ---------------------------------------------------------------- settings */
 
 const THEME_CHOICES: { mode: ThemeMode; label: string; icon: ReactNode; swatch: string[] }[] = [
-  { mode: "system", label: "System", icon: <Monitor size={14} />, swatch: ["#f4f5f8", "#0c0d11"] },
-  { mode: "light", label: "Light", icon: <Sun size={14} />, swatch: ["#ffffff", "#eef0ff"] },
-  { mode: "dark", label: "Dark", icon: <Moon size={14} />, swatch: ["#14151b", "#1d1e26"] },
+  { mode: "system", label: "System", icon: <Monitor size={14} />, swatch: ["#faf9f5", "#262624"] },
+  { mode: "light", label: "Light", icon: <Sun size={14} />, swatch: ["#ffffff", "#f7e9e2"] },
+  { mode: "dark", label: "Dark", icon: <Moon size={14} />, swatch: ["#30302e", "#1f1e1d"] },
 ];
 
 export function SettingsView({
@@ -564,3 +564,4 @@ export function SettingsView({
     </div>
   );
 }
+

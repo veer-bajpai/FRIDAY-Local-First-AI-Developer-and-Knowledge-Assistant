@@ -87,3 +87,4 @@ The API can serve health, settings, documents, collections, history, and keyword
 The backend does not load `.env` files itself. The launcher and Docker Compose provide their configured environment variables.
 
 The backend works without Ollama for health, browsing, uploads, and keyword retrieval. Chat generation requires an available model at `OLLAMA_URL`. Requests from this machine are allowed; any other client needs the API token (see [operations](../docs/operations.md#security)). Full variable list: [docs/operations.md](../docs/operations.md).
+

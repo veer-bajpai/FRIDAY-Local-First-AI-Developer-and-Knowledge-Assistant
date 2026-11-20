@@ -396,3 +396,4 @@ def parse_remember(text: str) -> str | None:
 
 
 EmbedFn = Callable[[str], Any]
+

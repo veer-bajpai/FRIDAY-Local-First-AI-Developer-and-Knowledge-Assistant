@@ -111,3 +111,4 @@ def test_migration_upgrades_old_database(tmp_path):
     connection.row_factory = sqlite3.Row
     results = knowledge.retrieve(connection, "gearbox", None, 3)
     assert results and results[0]["title"] == "old.txt"
+

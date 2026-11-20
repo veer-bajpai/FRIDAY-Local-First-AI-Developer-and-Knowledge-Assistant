@@ -133,3 +133,4 @@ def test_terminal_model_command_lists_and_switches(monkeypatch):
     asyncio.run(app._switch_model("2"))
     assert calls[-1][0] == "PATCH" and calls[-1][2] == {"model": "qwen2.5-coder:7b"}
     assert app.model == "qwen2.5-coder:7b"
+

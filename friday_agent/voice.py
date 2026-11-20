@@ -26,3 +26,4 @@ def listen(seconds: int = 8) -> str:
     sd.wait()
     segments, _ = _model().transcribe(np.asarray(audio).reshape(-1))
     return " ".join(segment.text.strip() for segment in segments).strip()
+

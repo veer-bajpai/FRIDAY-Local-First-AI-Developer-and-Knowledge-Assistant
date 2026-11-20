@@ -212,3 +212,4 @@ async def run_agent(
                 if not future.done():
                     future.cancel()
             state.pending.clear()
+

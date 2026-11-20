@@ -204,3 +204,4 @@ The launcher reads environment variables from the process environment; it does n
 - Every request passes `backend/app/security.py`: loopback clients are trusted (`FRIDAY_AUTH=auto`), every other client must send the API token; `FRIDAY_AUTH=required` demands it everywhere. Host headers are checked (DNS-rebinding protection), requests are rate- and size-limited, and agent routes additionally require a local client or token. Bypass mode needs `FRIDAY_ALLOW_BYPASS=1`. See [operations.md](operations.md).
 - CORS is a browser policy, not authentication.
 - Chat prompts and retrieved document text are sent to the configured `OLLAMA_URL`; use a trusted local or explicitly configured Ollama service.
+

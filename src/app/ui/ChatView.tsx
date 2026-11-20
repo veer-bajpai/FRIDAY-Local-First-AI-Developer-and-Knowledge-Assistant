@@ -202,7 +202,10 @@ function sourceLocation(source: Source) {
 
 function summary(message: Message) {
   const seconds = Math.max(1, Math.round((message.elapsedMs ?? 0) / 1000));
-  if (message.failed) return `Stopped after ${seconds}s`;
+  if (message.failed) {
+    const errored = message.steps?.some((step) => step.state === "error");
+    return `${errored ? "Failed" : "Stopped"} after ${seconds}s`;
+  }
   const parts = [`Answered in ${seconds}s`];
   if (message.sources?.length) parts.push(`${message.sources.length} source${message.sources.length === 1 ? "" : "s"}`);
   if (message.memories?.length) parts.push(`${message.memories.length} memor${message.memories.length === 1 ? "y" : "ies"}`);
@@ -419,3 +422,4 @@ export function ChatHeader({ title, online }: { title: string; online: boolean |
     </div>
   );
 }
+
